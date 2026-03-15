@@ -16,8 +16,10 @@ from lib.network_scanner import NetworkScanner
 from lib.data_collector import DataCollector
 from lib.connection_mapper import ConnectionMapper
 from lib.credential_manager import CredentialManager
+from lib.topology_builder import TopologyBuilder
 
 # Set up logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class MikrotikMapper:
@@ -418,6 +420,14 @@ class MikrotikMapper:
                                         if iface['mac'].upper() == full_mac.upper():
                                             remote_port = iface['port'] if iface['port'] else "unknown"
                                             break
+
+                            # Resolve bridge interfaces for local_interface
+                            if local_interface.startswith("bridge") and local_ip in data and "bridge_ports" in data[local_ip]:
+                                for port in data[local_ip]["bridge_ports"]:
+                                    port_mac = port.get("mac_address", "")
+                                    if port_mac.upper() == full_mac.upper():
+                                        local_interface = port.get("interface", "unknown")
+                                        break
                                 
                                 # Create connection string (avoid duplicates)
                                 connection1 = f"{local_name}:{local_interface} <-> {remote_name}:{remote_port}"
@@ -565,6 +575,27 @@ class MikrotikMapper:
         
         logger.info("Full network mapping workflow complete")
         return connection_map
+    
+    def generate_refactored_topology(self, data_file: str, output_file: str = "data/topology.txt"):
+        """
+        Generate network topology using the refactored approach.
+        
+        Args:
+            data_file (str): JSON file with collected device data
+            output_file (str): Output file for refactored topology
+        """
+        logger.info(f"Generating refactored topology from {data_file}")
+        
+        # Create topology builder
+        builder = TopologyBuilder()
+        
+        # Build topology using refactored approach
+        if builder.build_complete_topology(data_file, output_file):
+            logger.info("Refactored topology generation complete")
+            return True
+        else:
+            logger.error("Failed to generate refactored topology")
+            return False
 
 def main():
     """Main command-line interface."""
@@ -615,6 +646,12 @@ Examples:
         "--generate-topology",
         action="store_true",
         help="Generate network topology diagram from collected data"
+    )
+    
+    parser.add_argument(
+        "--generate-refactored-topology",
+        action="store_true",
+        help="Generate network topology using refactored approach"
     )
     
     # Credential management
@@ -756,6 +793,21 @@ Examples:
         mapper = MikrotikMapper()
         logger.info("Generating network topology diagram")
         mapper.generate_topology_diagram(
+            data_file=args.data_file,
+            output_file="data/topology.txt"
+        )
+        return
+    
+    # Handle refactored topology generation (doesn't need authentication)
+    if args.generate_refactored_topology:
+        # Generate refactored network topology
+        if not args.data_file:
+            parser.error("--generate-refactored-topology requires --data-file")
+        
+        # Create mapper just for refactored topology generation
+        mapper = MikrotikMapper()
+        logger.info("Generating refactored network topology")
+        mapper.generate_refactored_topology(
             data_file=args.data_file,
             output_file="data/topology.txt"
         )

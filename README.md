@@ -113,6 +113,23 @@ This will generate a topology diagram showing:
 - Intelligent recommendations for network optimization
 - Output saved to `data/topology.txt`
 
+### Generate Refactored Network Topology (Enhanced)
+
+Create an enhanced network topology using the refactored approach with improved accuracy:
+```bash
+python3 main.py --generate-refactored-topology --data-file data/collected_data.json
+```
+
+The refactored approach provides:
+- Accurate physical interface names instead of bridge names
+- Hierarchical device naming (DNS > DHCP > Neighbor discovery)
+- Automatic end device identification
+- Detailed MAC-to-port mappings
+- Directory-style topology presentation
+- Better connection accuracy using neighbor discovery
+
+Note: To fully utilize the refactored approach, fresh data collection is recommended as it requires additional data sources (`/ip neighbor`, `/ip dns static`, `/interface bridge host`).
+
 ## Running Tests
 
 The tool includes a comprehensive test suite that can be run with user-provided credentials:

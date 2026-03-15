@@ -87,6 +87,28 @@
   - Improve user experience for credential management
   - Updated help text and examples
 
+## Edge Router Detection Enhancement
+
+### Feature Implementation
+- ✅ **Add edge router identification** based on public IP address presence
+  - Edge router defined as: "device that contains public IP address"
+  - Added `_is_public_ip()` method to validate public vs private IP addresses
+  - Added `_identify_edge_routers()` method to scan device IP configurations
+  - Integrated edge router detection into topology output generation
+
+### Implementation Details
+- Extended `MikrotikSSHClient` with `get_ip_addresses()` method for `/ip address print` collection
+- Updated `DataCollector` to gather IP address information during data collection
+- Enhanced `TopologyBuilder` with edge router detection logic using public IP validation  
+- Added "EDGE ROUTERS (Public IP Addresses)" section to topology output
+- Maintains backward compatibility with existing workflows
+
+### Key Improvements
+- **Automatic Edge Detection**: Identifies network boundary devices automatically
+- **Public IP Validation**: Proper RFC1918 private IP filtering with robust validation
+- **Clear Output Presentation**: Lists edge routers with associated public IP addresses
+- **Performance Optimized**: Minimal overhead, integrated with existing topology workflow
+
 ## Initial Setup
 Created AGENT.md file for tracking agent development progress.
 
@@ -199,6 +221,34 @@ Added comprehensive test suite:
 - [x] Add encrypted credential storage
 - [x] Optimize code with existing libraries
 - [x] Create test suite with user password prompts
+
+## Refactored Topology Builder Implementation
+
+### New Approach Overview
+Implemented a completely refactored network topology building approach based on user specifications:
+1. **Step 1**: Read `/ip/neighbor` on each device to get neighbor names and MAC addresses
+2. **Step 2**: Collect `/ip/dhcp-server/lease` data to build MAC-to-IP mapping
+3. **Step 3**: Collect `/ip/dns/static` data to build IP-to-name mapping  
+4. **Step 4**: Build comprehensive MAC-to-name table with priority (DNS > DHCP > Neighbors)
+5. **Step 5**: Collect `/interface/bridge/host` data to derive MAC-to-physical port mapping
+6. **Step 6**: Build global MAC→device:physical port mapping; wherever possible MAC→device:physical port→name
+7. **Step 7**: Identify end devices (devices with only one physical interface connected, excluding WiFi clients)
+8. **Step 8**: Build relationships between nodes and switches using graph theory
+9. **Step 9**: Generate directory-style topology presentation
+
+### Implementation Details
+- Extended `MikrotikSSHClient` with new methods for all required Mikrotik commands
+- Updated `DataCollector` to gather the new data types
+- Created new `TopologyBuilder` class implementing the refactored approach
+- Added `--generate-refactored-topology` command line option to `main.py`
+- Produces enhanced topology output with accurate physical interface names and proper device classification
+
+### Key Improvements
+- **Accurate Interface Names**: Shows actual physical ports (ether1, ether2) instead of bridge names
+- **Hierarchical Naming**: Proper priority order (DNS > DHCP > Neighbors) for device identification
+- **End Device Detection**: Automatically identifies endpoint devices vs. infrastructure (e.g., device with MAC BC:24:11:50:C2:68)
+- **Physical Port Mapping**: Direct MAC-to-port associations from bridge host tables
+- **Graph-Based Relationships**: Applies graph theory for accurate connection mapping
 
 ## Project Status
 Development complete. The Mikrotik Network Mapper tool is ready for use with all requested features implemented, including comprehensive automated tests.
