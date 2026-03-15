@@ -80,6 +80,47 @@ class TopologyBuilder:
 
         return identity_ip_map
 
+    def _build_known_device_interface_map(self) -> Dict[str, Dict[str, str]]:
+        """Build MAC-to-device-interface mapping for managed MikroTik ports."""
+        interface_map = {}
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._clean_name(
+                device_data.get("device_info", {}).get("identity", hostname)
+            )
+            device_ip = device_data.get("hostname", hostname)
+
+            for interface in device_data.get("interfaces", []):
+                mac = (
+                    interface.get("mac_address")
+                    or interface.get("link_layer_address")
+                    or ""
+                ).upper()
+                port = self._clean_name(interface.get("name", ""))
+                if not mac or not port or mac == "00:00:00:00:00:00":
+                    continue
+
+                new_entry = {
+                    "device": device_name,
+                    "port": port,
+                    "ip": device_ip,
+                }
+                current_entry = interface_map.get(mac)
+                if current_entry:
+                    current_is_physical = self._is_physical_interface(current_entry["port"])
+                    new_is_physical = self._is_physical_interface(port)
+                    if current_is_physical and not new_is_physical:
+                        continue
+                    if current_is_physical == new_is_physical and current_entry["port"] <= port:
+                        continue
+
+                interface_map[mac] = new_entry
+
+        return interface_map
+
     def _is_physical_interface(self, interface: str) -> bool:
         """Return True for physical-facing interfaces we want in the tree."""
         if not interface:
@@ -649,7 +690,7 @@ class TopologyBuilder:
     
     def _build_device_port_endpoints(self) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
         """Build per-device endpoint lists keyed by physical port."""
-        device_name_map, device_ip_map = self._build_known_device_maps()
+        device_interface_map = self._build_known_device_interface_map()
         managed_identity_ip_map = self._build_known_identity_ip_map()
         local_device_mac_sets = self._build_local_device_mac_sets()
         device_port_endpoints: Dict[str, Dict[str, Dict[Tuple[str, str], Dict[str, Any]]]] = (
@@ -675,8 +716,9 @@ class TopologyBuilder:
                 if mac in local_device_mac_sets.get(device_name, set()):
                     continue
 
-                if mac in device_name_map:
-                    remote_name = self._clean_name(device_name_map[mac])
+                if mac in device_interface_map:
+                    remote_interface = device_interface_map[mac]
+                    remote_name = self._clean_name(remote_interface["device"])
                     if not remote_name or remote_name == device_name:
                         continue
 
@@ -687,8 +729,9 @@ class TopologyBuilder:
                         "mac": mac,
                         "ip": managed_identity_ip_map.get(
                             remote_name,
-                            device_ip_map.get(mac, "Unknown IP"),
+                            remote_interface.get("ip", "Unknown IP"),
                         ),
+                        "remote_port": remote_interface.get("port", ""),
                     }
                 else:
                     host_name = self._clean_name(self.mac_name_map.get(mac, ""))
@@ -719,6 +762,62 @@ class TopologyBuilder:
 
         return normalized_endpoints
 
+    def _reduce_port_endpoints(
+        self,
+        endpoints: List[Dict[str, Any]],
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+    ) -> List[Dict[str, Any]]:
+        """Reduce shared-segment endpoints to direct children plus unexplained hosts."""
+        device_endpoints = [endpoint for endpoint in endpoints if endpoint["type"] == "device"]
+        if not device_endpoints:
+            return endpoints
+
+        explained_by = defaultdict(set)
+        reachable_hosts = {}
+
+        for endpoint in device_endpoints:
+            remote_name = endpoint["name"]
+            upstream_port = endpoint.get("remote_port", "")
+            child_devices = set()
+            child_host_macs = set()
+
+            for port, child_endpoints in device_port_endpoints.get(remote_name, {}).items():
+                if upstream_port and port == upstream_port:
+                    continue
+                for child_endpoint in child_endpoints:
+                    if child_endpoint["type"] == "device":
+                        child_devices.add(child_endpoint["name"])
+                    else:
+                        child_host_macs.add(child_endpoint["mac"])
+
+            for child_name in child_devices:
+                explained_by[child_name].add(remote_name)
+            reachable_hosts[remote_name] = child_host_macs
+
+        if len(device_endpoints) == 1:
+            direct_device_names = {device_endpoints[0]["name"]}
+        else:
+            direct_device_names = {
+                endpoint["name"]
+                for endpoint in device_endpoints
+                if endpoint["name"] not in explained_by
+            }
+            if not direct_device_names:
+                direct_device_names = {endpoint["name"] for endpoint in device_endpoints}
+
+        explained_host_macs = set()
+        for device_name in direct_device_names:
+            explained_host_macs.update(reachable_hosts.get(device_name, set()))
+
+        reduced_endpoints = []
+        for endpoint in endpoints:
+            if endpoint["type"] == "device" and endpoint["name"] in direct_device_names:
+                reduced_endpoints.append(endpoint)
+            elif endpoint["type"] == "host" and endpoint["mac"] not in explained_host_macs:
+                reduced_endpoints.append(endpoint)
+
+        return reduced_endpoints or endpoints
+
     def _find_upstream_port(
         self,
         device_name: str,
@@ -733,6 +832,34 @@ class TopologyBuilder:
                     return port
         return ""
 
+    def _get_display_remote_port(self, endpoint: Dict[str, Any]) -> str:
+        """Return a remote port label only when it is a physical interface."""
+        remote_port = endpoint.get("remote_port", "")
+        if self._is_physical_interface(remote_port):
+            return remote_port
+        return ""
+
+    def _resolve_child_upstream_port(
+        self,
+        endpoint: Dict[str, Any],
+        parent_name: str,
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+    ) -> str:
+        """Pick the child port that faces the parent for subtree suppression."""
+        remote_port = endpoint.get("remote_port", "")
+        if self._is_physical_interface(remote_port):
+            return remote_port
+
+        reciprocal_port = self._find_upstream_port(
+            endpoint["name"],
+            parent_name,
+            device_port_endpoints,
+        )
+        if reciprocal_port:
+            return reciprocal_port
+
+        return remote_port
+
     def _format_endpoint_label(self, endpoint: Dict[str, Any]) -> str:
         """Format a device or host endpoint for topology output."""
         label = endpoint["name"]
@@ -740,6 +867,9 @@ class TopologyBuilder:
         mac = endpoint["mac"]
 
         if endpoint["type"] == "device":
+            remote_port = self._get_display_remote_port(endpoint)
+            if remote_port:
+                label = f"<{remote_port}> {label}"
             if ip and ip != "Unknown IP":
                 return f"{label} ({ip}) [{mac}]"
             return f"{label} [{mac}]"
@@ -786,11 +916,7 @@ class TopologyBuilder:
                 port,
                 device_port_endpoints.get(device_name, {}).get(port, []),
             )
-            if any(endpoint["type"] == "device" for endpoint in endpoints):
-                endpoints = [
-                    endpoint for endpoint in endpoints
-                    if endpoint["type"] == "device"
-                ]
+            endpoints = self._reduce_port_endpoints(endpoints, device_port_endpoints)
 
             for endpoint_index, endpoint in enumerate(endpoints):
                 endpoint_connector = "└─" if endpoint_index == len(endpoints) - 1 else "├─"
@@ -824,8 +950,8 @@ class TopologyBuilder:
                         f"{self._format_endpoint_label(endpoint)}"
                     )
                     visited_devices.add(child_name)
-                    child_upstream_port = self._find_upstream_port(
-                        child_name,
+                    child_upstream_port = self._resolve_child_upstream_port(
+                        endpoint,
                         device_name,
                         device_port_endpoints,
                     )
