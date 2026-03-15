@@ -260,6 +260,120 @@ class TopologyBuilder:
                 formatted_entries.append(public_entry["address"])
 
         return " | ".join(formatted_entries)
+
+    def _get_interfaces_by_name(
+        self,
+        device_data: Dict[str, Any],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Map interface names to interface records."""
+        return {
+            self._clean_name(interface.get("name", "")): interface
+            for interface in device_data.get("interfaces", [])
+            if interface.get("name")
+        }
+
+    def _get_interface_mac(self, interface_data: Dict[str, Any]) -> str:
+        """Return the best MAC address available for an interface."""
+        return (
+            interface_data.get("mac_address")
+            or interface_data.get("link_layer_address")
+            or ""
+        ).upper()
+
+    def _get_vlan_label(self, interface_name: str, interface_data: Dict[str, Any]) -> str:
+        """Return a display suffix for VLAN interfaces when VLAN ID is known."""
+        if interface_data.get("type", "").lower() != "vlan":
+            return ""
+
+        vlan_id = (
+            interface_data.get("vlan_id")
+            or interface_data.get("vlanid")
+            or interface_data.get("vlan")
+            or ""
+        )
+        if not vlan_id:
+            match = re.search(r"vlan[-_ ]?(\d+)", interface_name, re.IGNORECASE)
+            if match:
+                vlan_id = match.group(1)
+
+        if vlan_id:
+            return f" [vlan {vlan_id}]"
+        return ""
+
+    def _format_interface_label(
+        self,
+        interface_name: str,
+        interface_data: Dict[str, Any],
+        address: str = "",
+    ) -> str:
+        """Format an interface node label for the topology tree."""
+        label = interface_name
+        if address:
+            label += f" ({address})"
+
+        mac_address = self._get_interface_mac(interface_data)
+        if mac_address:
+            label += f" [{mac_address}]"
+
+        label += self._get_vlan_label(interface_name, interface_data)
+        return label
+
+    def _build_wan_port_overrides(
+        self,
+        device_data: Dict[str, Any],
+    ) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[str, str]]:
+        """Build synthetic WAN branches rendered under the root WAN port."""
+        public_entries = self._find_public_ip_entries(device_data)
+        if not public_entries:
+            return {}, {}
+
+        interfaces_by_name = self._get_interfaces_by_name(device_data)
+        port_overrides: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        port_labels: Dict[str, str] = {}
+
+        for public_entry in public_entries[:3]:
+            chain = self._build_wan_chain(device_data, public_entry)
+            if not chain:
+                continue
+
+            root_port = chain[0]
+            root_interface = interfaces_by_name.get(root_port, {})
+            if not port_labels.get(root_port):
+                if len(chain) == 1:
+                    port_labels[root_port] = self._format_interface_label(
+                        root_port,
+                        root_interface,
+                        public_entry["address"],
+                    )
+                else:
+                    port_labels[root_port] = self._format_interface_label(
+                        root_port,
+                        root_interface,
+                    )
+
+            chain_labels = []
+            for chain_index, interface_name in enumerate(chain[1:], start=1):
+                interface_data = interfaces_by_name.get(interface_name, {})
+                address = (
+                    public_entry["address"]
+                    if chain_index == len(chain) - 1
+                    else ""
+                )
+                chain_labels.append(
+                    self._format_interface_label(
+                        interface_name,
+                        interface_data,
+                        address=address,
+                    )
+                )
+
+            if chain_labels:
+                port_overrides[root_port].append({
+                    "type": "wan_chain",
+                    "chain_labels": chain_labels,
+                })
+
+        return dict(port_overrides), port_labels
         
     def _is_public_ip(self, ip):
         """
@@ -585,21 +699,31 @@ class TopologyBuilder:
         visited_devices: Set[str],
         upstream_port: str = "",
         prefix: str = "",
+        port_overrides: Dict[str, List[Dict[str, Any]]] = None,
+        port_labels: Dict[str, str] = None,
     ) -> List[str]:
         """Render a recursive per-port tree for one managed device."""
         lines = []
+        port_overrides = port_overrides or {}
+        port_labels = port_labels or {}
         ports = [
             port
-            for port in sorted(device_port_endpoints.get(device_name, {}))
+            for port in sorted(
+                set(device_port_endpoints.get(device_name, {})) | set(port_overrides)
+            )
             if port != upstream_port
         ]
 
         for port_index, port in enumerate(ports):
             port_connector = "└─" if port_index == len(ports) - 1 else "├─"
             port_prefix = prefix + ("   " if port_index == len(ports) - 1 else "│  ")
-            lines.append(f"{prefix}{port_connector} {port}")
+            display_port = port_labels.get(port, port)
+            lines.append(f"{prefix}{port_connector} {display_port}")
 
-            endpoints = device_port_endpoints[device_name][port]
+            endpoints = port_overrides.get(
+                port,
+                device_port_endpoints.get(device_name, {}).get(port, []),
+            )
             if any(endpoint["type"] == "device" for endpoint in endpoints):
                 endpoints = [
                     endpoint for endpoint in endpoints
@@ -611,6 +735,18 @@ class TopologyBuilder:
                 endpoint_prefix = port_prefix + (
                     "   " if endpoint_index == len(endpoints) - 1 else "│  "
                 )
+
+                if endpoint["type"] == "wan_chain":
+                    chain_labels = endpoint.get("chain_labels", [])
+                    if not chain_labels:
+                        continue
+
+                    lines.append(f"{port_prefix}{endpoint_connector} {chain_labels[0]}")
+                    chain_prefix = endpoint_prefix
+                    for chain_label in chain_labels[1:]:
+                        lines.append(f"{chain_prefix}└─ {chain_label}")
+                        chain_prefix += "   "
+                    continue
 
                 if endpoint["type"] == "device":
                     child_name = endpoint["name"]
@@ -692,20 +828,16 @@ class TopologyBuilder:
 
             root_ip = managed_identity_ip_map.get(root_device, "Unknown IP")
             header = f"{root_device} ({root_ip})"
-            wan_summary = self._format_root_wan_summary(
-                connected_device_data.get(root_device, {})
-            )
-            if wan_summary:
-                header += f" WAN: {wan_summary}"
-            elif edge_routers.get(root_device):
-                header += f" WAN: {', '.join(edge_routers[root_device][:3])}"
-
             lines.append(header)
+            root_device_data = connected_device_data.get(root_device, {})
+            port_overrides, port_labels = self._build_wan_port_overrides(root_device_data)
             visited_devices = {root_device}
             tree_lines = self._render_device_tree(
                 root_device,
                 device_port_endpoints,
                 visited_devices,
+                port_overrides=port_overrides,
+                port_labels=port_labels,
             )
             if tree_lines:
                 lines.extend(tree_lines)

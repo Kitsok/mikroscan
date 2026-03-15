@@ -22,13 +22,14 @@ def test_generate_topology_output_builds_rooted_tree():
             "interfaces": [
                 {"name": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
                 {"name": "ether2", "mac_address": "AA:AA:AA:AA:AA:02"},
+                {"name": "ether3", "mac_address": "AA:AA:AA:AA:AA:03"},
                 {"name": "WAN-VLAN6", "type": "vlan", "mac_address": "AA:AA:AA:AA:AA:01"},
                 {"name": "WAN-pppoe", "type": "pppoe-out"},
             ],
             "bridge_hosts": [
-                {"interface": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
                 {"interface": "ether1", "mac_address": "CC:CC:CC:CC:CC:01"},
-                {"interface": "ether2", "mac_address": "DD:DD:DD:DD:DD:01"},
+                {"interface": "ether2", "mac_address": "BB:BB:BB:BB:BB:01"},
+                {"interface": "ether3", "mac_address": "DD:DD:DD:DD:DD:01"},
             ],
             "dhcp_leases": [
                 {
@@ -90,10 +91,15 @@ def test_generate_topology_output_builds_rooted_tree():
             os.unlink(output_file)
 
     assert "NETWORK TOPOLOGY" in output
-    assert "Root (1.1.1.1) WAN: ether1 -> WAN-VLAN6 -> WAN-pppoe (8.8.8.8/32)" in output
-    assert "├─ ether1" in output
+    assert "Root (1.1.1.1)" in output
+    assert "WAN:" not in output
+    assert "├─ ether1 [AA:AA:AA:AA:AA:01]" in output
+    assert "│  └─ WAN-VLAN6 [AA:AA:AA:AA:AA:01] [vlan 6]" in output
+    assert "│     └─ WAN-pppoe (8.8.8.8/32)" in output
     assert "Branch (192.168.0.2) [BB:BB:BB:BB:BB:01]" in output
-    assert "│  └─ wifi1" in output or "   └─ wifi1" in output
+    assert "├─ ether2" in output
+    assert "│  └─ Branch (192.168.0.2) [BB:BB:BB:BB:BB:01]" in output
+    assert "│     └─ wifi1" in output or "   └─ wifi1" in output
     assert "leaf-host (192.168.0.30) [EE:EE:EE:EE:EE:01]" in output
     assert "direct-host (192.168.0.20) [DD:DD:DD:DD:DD:01]" in output
     assert "upstream-host" not in output
