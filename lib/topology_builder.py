@@ -280,6 +280,23 @@ class TopologyBuilder:
             or ""
         ).upper()
 
+    def _build_interface_ip_map(self, device_data: Dict[str, Any]) -> Dict[str, str]:
+        """Map interface names to one IPv4/CIDR address when available."""
+        interface_ip_map = {}
+
+        for ip_entry in device_data.get("ip_addresses", []):
+            address = ip_entry.get("address", "")
+            interface_name = (
+                self._clean_name(ip_entry.get("actual_interface", ""))
+                or self._clean_name(ip_entry.get("interface", ""))
+            )
+            if not address or not interface_name:
+                continue
+            if interface_name not in interface_ip_map:
+                interface_ip_map[interface_name] = address
+
+        return interface_ip_map
+
     def _get_vlan_label(self, interface_name: str, interface_data: Dict[str, Any]) -> str:
         """Return a display suffix for VLAN interfaces when VLAN ID is known."""
         if interface_data.get("type", "").lower() != "vlan":
@@ -328,6 +345,7 @@ class TopologyBuilder:
             return {}, {}
 
         interfaces_by_name = self._get_interfaces_by_name(device_data)
+        interface_ip_map = self._build_interface_ip_map(device_data)
         port_overrides: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         port_labels: Dict[str, str] = {}
 
@@ -343,21 +361,25 @@ class TopologyBuilder:
                     port_labels[root_port] = self._format_interface_label(
                         root_port,
                         root_interface,
-                        public_entry["address"],
+                        interface_ip_map.get(root_port, public_entry["address"]),
                     )
                 else:
                     port_labels[root_port] = self._format_interface_label(
                         root_port,
                         root_interface,
+                        interface_ip_map.get(root_port, ""),
                     )
 
             chain_labels = []
             for chain_index, interface_name in enumerate(chain[1:], start=1):
                 interface_data = interfaces_by_name.get(interface_name, {})
                 address = (
-                    public_entry["address"]
-                    if chain_index == len(chain) - 1
-                    else ""
+                    interface_ip_map.get(interface_name, "")
+                    or (
+                        public_entry["address"]
+                        if chain_index == len(chain) - 1
+                        else ""
+                    )
                 )
                 chain_labels.append(
                     self._format_interface_label(
@@ -374,6 +396,34 @@ class TopologyBuilder:
                 })
 
         return dict(port_overrides), port_labels
+
+    def _build_device_port_labels(self) -> Dict[str, Dict[str, str]]:
+        """Build display labels for device ports including IP/MAC when known."""
+        device_port_labels = {}
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._clean_name(
+                device_data.get("device_info", {}).get("identity", hostname)
+            )
+            interfaces_by_name = self._get_interfaces_by_name(device_data)
+            interface_ip_map = self._build_interface_ip_map(device_data)
+            port_labels = {}
+
+            for interface_name, interface_data in interfaces_by_name.items():
+                if not self._is_physical_interface(interface_name):
+                    continue
+                port_labels[interface_name] = self._format_interface_label(
+                    interface_name,
+                    interface_data,
+                    interface_ip_map.get(interface_name, ""),
+                )
+
+            device_port_labels[device_name] = port_labels
+
+        return device_port_labels
         
     def _is_public_ip(self, ip):
         """
@@ -535,7 +585,7 @@ class TopologyBuilder:
         logger.info(f"Built MAC-to-name map with {len(self.mac_name_map)} entries")
     
     def build_mac_ip_map(self):
-        """Build MAC-to-IP mapping from DHCP leases."""
+        """Build MAC-to-IP mapping from device, DHCP, and ARP data."""
         logger.info("Building MAC-to-IP mapping...")
 
         _, device_ip_map = self._build_known_device_maps()
@@ -547,9 +597,15 @@ class TopologyBuilder:
                 
             for dhcp_entry in device_data.get("dhcp_leases", []):
                 mac = dhcp_entry.get("mac_address", "").upper()
-                active_address = dhcp_entry.get("active_address", "")
-                if mac and active_address:
-                    self.mac_ip_map[mac] = active_address
+                address = dhcp_entry.get("active_address") or dhcp_entry.get("address", "")
+                if mac and address:
+                    self.mac_ip_map[mac] = address
+
+            for arp_entry in device_data.get("arp_table", []):
+                mac = arp_entry.get("mac_address", "").upper()
+                address = arp_entry.get("address", "")
+                if mac and address and mac not in self.mac_ip_map:
+                    self.mac_ip_map[mac] = address
         
         logger.info(f"Built MAC-to-IP map with {len(self.mac_ip_map)} entries")
     
@@ -701,11 +757,13 @@ class TopologyBuilder:
         prefix: str = "",
         port_overrides: Dict[str, List[Dict[str, Any]]] = None,
         port_labels: Dict[str, str] = None,
+        device_port_labels: Dict[str, Dict[str, str]] = None,
     ) -> List[str]:
         """Render a recursive per-port tree for one managed device."""
         lines = []
         port_overrides = port_overrides or {}
         port_labels = port_labels or {}
+        device_port_labels = device_port_labels or {}
         ports = [
             port
             for port in sorted(
@@ -717,7 +775,11 @@ class TopologyBuilder:
         for port_index, port in enumerate(ports):
             port_connector = "└─" if port_index == len(ports) - 1 else "├─"
             port_prefix = prefix + ("   " if port_index == len(ports) - 1 else "│  ")
-            display_port = port_labels.get(port, port)
+            display_port = (
+                port_labels.get(port)
+                or device_port_labels.get(device_name, {}).get(port)
+                or port
+            )
             lines.append(f"{prefix}{port_connector} {display_port}")
 
             endpoints = port_overrides.get(
@@ -773,6 +835,7 @@ class TopologyBuilder:
                         visited_devices,
                         upstream_port=child_upstream_port,
                         prefix=endpoint_prefix,
+                        device_port_labels=device_port_labels,
                     )
                     if child_lines:
                         lines.extend(child_lines)
@@ -797,6 +860,7 @@ class TopologyBuilder:
         logger.info("Generating topology output...")
         
         device_port_endpoints = self._build_device_port_endpoints()
+        device_port_labels = self._build_device_port_labels()
         managed_identity_ip_map = self._build_known_identity_ip_map()
         edge_routers = self._identify_edge_routers()
         connected_device_data = {
@@ -838,6 +902,7 @@ class TopologyBuilder:
                 visited_devices,
                 port_overrides=port_overrides,
                 port_labels=port_labels,
+                device_port_labels=device_port_labels,
             )
             if tree_lines:
                 lines.extend(tree_lines)
@@ -861,6 +926,7 @@ class TopologyBuilder:
                     device_name,
                     device_port_endpoints,
                     {device_name},
+                    device_port_labels=device_port_labels,
                 )
                 if tree_lines:
                     lines.extend(tree_lines)
