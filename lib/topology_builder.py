@@ -4,6 +4,7 @@ Refactored topology builder for Mikrotik Mapper.
 Implements the new approach based on neighbors, DHCP, DNS, and bridge host data.
 """
 
+import ipaddress
 import json
 import logging
 import os
@@ -38,30 +39,12 @@ class TopologyBuilder:
         """
         if not ip:
             return False
-            
-        # IPv4 private address ranges
-        if ip.startswith('127.'):  # Loopback
+
+        try:
+            address = ipaddress.ip_address(ip)
+            return address.is_global and not address.is_multicast
+        except ValueError:
             return False
-        if ip.startswith('10.'):   # 10.0.0.0/8
-            return False
-        if ip.startswith('192.168.'):  # 192.168.0.0/16
-            return False
-        if ip.startswith('172.'):
-            # Check if it's in 172.16.0.0/12 private range
-            parts = ip.split('.')
-            if len(parts) == 4:
-                try:
-                    second_octet = int(parts[1])
-                    if 16 <= second_octet <= 31:
-                        return False
-                except ValueError:
-                    pass
-        
-        # Filter out some other reserved ranges
-        if ip.startswith('169.254.'):  # Link-local
-            return False
-            
-        return True
     
     def _identify_edge_routers(self):
         """
