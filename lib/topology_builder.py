@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-Refactored topology builder for Mikrotik Mapper.
-Implements the new approach based on neighbors, DHCP, DNS, and bridge host data.
-"""
+"""Topology builder for MikroTik Mapper."""
 
 import ipaddress
 import json
@@ -16,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class TopologyBuilder:
-    """Builds network topology using the refactored approach."""
+    """Builds a rooted network topology tree from collected device data."""
     
     def __init__(self):
         """Initialize the topology builder."""
@@ -25,7 +22,6 @@ class TopologyBuilder:
         self.mac_ip_map = {}
         self.ip_name_map = {}
         self.mac_port_map = {}
-        self.topology_graph = defaultdict(list)
 
     def _clean_name(self, name: str) -> str:
         """Normalize display names parsed from RouterOS output."""
@@ -82,6 +78,39 @@ class TopologyBuilder:
                 identity_ip_map[identity] = management_ip
 
         return identity_ip_map
+
+    def _is_physical_interface(self, interface: str) -> bool:
+        """Return True for physical-facing interfaces we want in the tree."""
+        if not interface:
+            return False
+
+        interface = interface.lower()
+        return any(
+            interface.startswith(prefix)
+            for prefix in ("ether", "wifi", "wlan", "sfp", "combo")
+        )
+
+    def _build_local_device_mac_sets(self) -> Dict[str, Set[str]]:
+        """Build a map of managed device names to their own interface MACs."""
+        device_mac_sets = defaultdict(set)
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._clean_name(
+                device_data.get("device_info", {}).get("identity", hostname)
+            )
+            for interface in device_data.get("interfaces", []):
+                mac = (
+                    interface.get("mac_address")
+                    or interface.get("link_layer_address")
+                    or ""
+                ).upper()
+                if mac and mac != "00:00:00:00:00:00":
+                    device_mac_sets[device_name].add(mac)
+
+        return device_mac_sets
         
     def _is_public_ip(self, ip):
         """
@@ -291,8 +320,7 @@ class TopologyBuilder:
                 mac = bridge_host.get("mac_address", "").upper()
                 interface = bridge_host.get("interface", "")
                 if mac and interface:
-                    # Only track physical interfaces (ether, wlan, sfp, etc.)
-                    if any(phy_int in interface.lower() for phy_int in ['ether', 'wlan', 'sfp', 'combo']):
+                    if self._is_physical_interface(interface):
                         self.mac_port_map[mac] = {
                             "device": device_name,
                             "port": interface
@@ -300,209 +328,256 @@ class TopologyBuilder:
         
         logger.info(f"Built MAC-to-port map with {len(self.mac_port_map)} entries")
     
-    def identify_end_devices(self) -> List[Dict]:
-        """
-        Identify end devices (devices with only one physical interface).
-        
-        Returns:
-            List[Dict]: List of identified end devices
-        """
-        logger.info("Identifying end devices...")
-        
-        end_devices = []
-        
-        # For each device, count physical interfaces
+    def _build_device_port_endpoints(self) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        """Build per-device endpoint lists keyed by physical port."""
+        device_name_map, device_ip_map = self._build_known_device_maps()
+        managed_identity_ip_map = self._build_known_identity_ip_map()
+        local_device_mac_sets = self._build_local_device_mac_sets()
+        device_port_endpoints: Dict[str, Dict[str, Dict[Tuple[str, str], Dict[str, Any]]]] = (
+            defaultdict(lambda: defaultdict(dict))
+        )
+
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
                 continue
-                
-            device_name = device_data["device_info"].get("identity", hostname)
-            physical_interfaces = []
-            
-            # Count physical interfaces from bridge ports
-            for bridge_port in device_data.get("bridge_ports", []):
-                interface = bridge_port.get("interface", "")
-                if interface and any(phy_int in interface.lower() for phy_int in ['ether', 'wlan', 'sfp', 'combo']):
-                    physical_interfaces.append(interface)
-            
-            # If only one physical interface, it's likely an end device
-            if len(physical_interfaces) == 1:
-                mac_addresses = []
-                
-                # Try to find MAC addresses associated with this device
-                for mac, port_info in self.mac_port_map.items():
-                    if port_info["device"] == device_name:
-                        mac_addresses.append(mac)
-                
-                end_devices.append({
-                    "name": device_name,
-                    "hostname": hostname,
-                    "physical_interface": physical_interfaces[0] if physical_interfaces else "unknown",
-                    "mac_addresses": mac_addresses
-                })
-        
-        logger.info(f"Identified {len(end_devices)} end devices")
-        return end_devices
-    
-    def build_topology_relations(self):
-        """Build relationships between nodes using the collected data."""
-        logger.info("Building topology relationships...")
-        
-        # Use neighbors data to establish direct connections
-        for hostname, device_data in self.devices_data.items():
-            if not device_data.get("connected", False):
-                continue
-                
-            local_device = device_data["device_info"].get("identity", hostname)
-            
-            # Process neighbors to build connections
-            for neighbor in device_data.get("neighbors", []):
-                neighbor_mac = neighbor.get("mac_address", "").upper()
-                neighbor_interface = neighbor.get("interface", "")
-                
-                if neighbor_mac and neighbor_interface:
-                    # Try to resolve neighbor name
-                    neighbor_name = self.mac_name_map.get(neighbor_mac, f"Unknown-{neighbor_mac}")
-                    
-                    # Extract the actual interface name from the neighbor entry
-                    # Format is often "interface_name,bridge_name" or just "interface_name"
-                    local_port = neighbor_interface.split(',')[0]  # Take first part before comma
-                    
-                    # Add relationship to graph
-                    connection = {
-                        "local_device": local_device,
-                        "local_port": local_port,
-                        "remote_device": neighbor_name,
-                        "remote_port": "unknown",  # Would need more data to determine this
-                        "mac": neighbor_mac
+
+            device_name = self._clean_name(
+                device_data.get("device_info", {}).get("identity", hostname)
+            )
+
+            for bridge_host in device_data.get("bridge_hosts", []):
+                mac = bridge_host.get("mac_address", "").upper()
+                port = bridge_host.get("interface") or bridge_host.get("on_interface") or ""
+
+                if not mac or not self._is_physical_interface(port):
+                    continue
+                if mac == "00:00:00:00:00:00":
+                    continue
+                if mac in local_device_mac_sets.get(device_name, set()):
+                    continue
+
+                if mac in device_name_map:
+                    remote_name = self._clean_name(device_name_map[mac])
+                    if not remote_name or remote_name == device_name:
+                        continue
+
+                    key = ("device", remote_name)
+                    endpoint = {
+                        "type": "device",
+                        "name": remote_name,
+                        "mac": mac,
+                        "ip": managed_identity_ip_map.get(
+                            remote_name,
+                            device_ip_map.get(mac, "Unknown IP"),
+                        ),
                     }
-                    
-                    self.topology_graph[local_device].append(connection)
-        
-        logger.info(f"Built topology with {len(self.topology_graph)} devices having connections")
-    
-    def generate_topology_output(self, output_file: str = "data/refactored_topology.txt"):
+                else:
+                    host_name = self._clean_name(self.mac_name_map.get(mac, ""))
+                    host_ip = self.mac_ip_map.get(mac, "Unknown IP")
+                    display_name = host_name or host_ip or mac
+                    key = ("host", mac)
+                    endpoint = {
+                        "type": "host",
+                        "name": display_name,
+                        "mac": mac,
+                        "ip": host_ip,
+                    }
+
+                device_port_endpoints[device_name][port][key] = endpoint
+
+        normalized_endpoints = {}
+        for device_name, port_map in device_port_endpoints.items():
+            normalized_endpoints[device_name] = {}
+            for port, endpoints in port_map.items():
+                normalized_endpoints[device_name][port] = sorted(
+                    endpoints.values(),
+                    key=lambda endpoint: (
+                        endpoint["type"] != "device",
+                        endpoint["name"].lower(),
+                        endpoint["mac"],
+                    ),
+                )
+
+        return normalized_endpoints
+
+    def _find_upstream_port(
+        self,
+        device_name: str,
+        parent_name: str,
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+    ) -> str:
+        """Return the local port on device_name that faces parent_name."""
+        for port in sorted(device_port_endpoints.get(device_name, {})):
+            endpoints = device_port_endpoints[device_name][port]
+            for endpoint in endpoints:
+                if endpoint["type"] == "device" and endpoint["name"] == parent_name:
+                    return port
+        return ""
+
+    def _format_endpoint_label(self, endpoint: Dict[str, Any]) -> str:
+        """Format a device or host endpoint for topology output."""
+        label = endpoint["name"]
+        ip = endpoint.get("ip", "")
+        mac = endpoint["mac"]
+
+        if endpoint["type"] == "device":
+            if ip and ip != "Unknown IP":
+                return f"{label} ({ip}) [{mac}]"
+            return f"{label} [{mac}]"
+
+        if ip and ip != "Unknown IP" and ip != label:
+            return f"{label} ({ip}) [{mac}]"
+        return f"{label} [{mac}]"
+
+    def _render_device_tree(
+        self,
+        device_name: str,
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+        visited_devices: Set[str],
+        upstream_port: str = "",
+        prefix: str = "",
+    ) -> List[str]:
+        """Render a recursive per-port tree for one managed device."""
+        lines = []
+        ports = [
+            port
+            for port in sorted(device_port_endpoints.get(device_name, {}))
+            if port != upstream_port
+        ]
+
+        for port_index, port in enumerate(ports):
+            port_connector = "└─" if port_index == len(ports) - 1 else "├─"
+            port_prefix = prefix + ("   " if port_index == len(ports) - 1 else "│  ")
+            lines.append(f"{prefix}{port_connector} {port}")
+
+            endpoints = device_port_endpoints[device_name][port]
+            if any(endpoint["type"] == "device" for endpoint in endpoints):
+                endpoints = [
+                    endpoint for endpoint in endpoints
+                    if endpoint["type"] == "device"
+                ]
+
+            for endpoint_index, endpoint in enumerate(endpoints):
+                endpoint_connector = "└─" if endpoint_index == len(endpoints) - 1 else "├─"
+                endpoint_prefix = port_prefix + (
+                    "   " if endpoint_index == len(endpoints) - 1 else "│  "
+                )
+
+                if endpoint["type"] == "device":
+                    child_name = endpoint["name"]
+                    if child_name in visited_devices:
+                        lines.append(
+                            f"{port_prefix}{endpoint_connector} "
+                            f"{self._format_endpoint_label(endpoint)} [already shown]"
+                        )
+                        continue
+
+                    lines.append(
+                        f"{port_prefix}{endpoint_connector} "
+                        f"{self._format_endpoint_label(endpoint)}"
+                    )
+                    visited_devices.add(child_name)
+                    child_upstream_port = self._find_upstream_port(
+                        child_name,
+                        device_name,
+                        device_port_endpoints,
+                    )
+                    child_lines = self._render_device_tree(
+                        child_name,
+                        device_port_endpoints,
+                        visited_devices,
+                        upstream_port=child_upstream_port,
+                        prefix=endpoint_prefix,
+                    )
+                    if child_lines:
+                        lines.extend(child_lines)
+                    else:
+                        lines.append(f"{endpoint_prefix}└─ no downstream endpoints")
+                    continue
+
+                lines.append(
+                    f"{port_prefix}{endpoint_connector} "
+                    f"{self._format_endpoint_label(endpoint)}"
+                )
+
+        return lines
+
+    def generate_topology_output(self, output_file: str = "data/topology.txt"):
         """
-        Generate the final topology output in directory-like format.
+        Generate the final rooted topology tree.
         
         Args:
             output_file (str): Output file path
         """
         logger.info("Generating topology output...")
         
-        lines = []
-        lines.append("NETWORK PORT MAPPING")
-        lines.append("====================")
-        lines.append("")
-        
-        # Show port-to-device mapping for each device
-        for device_name in sorted(self.topology_graph.keys()):
-            lines.append(f"{device_name} PORT MAPPING:")
-            lines.append("-" * (len(device_name) + 15))
-            
-            # Group connections by local port
-            port_connections = {}
-            if device_name in self.topology_graph:
-                for conn in self.topology_graph[device_name]:
-                    local_port = conn.get('local_port', 'unknown')
-                    if local_port not in port_connections:
-                        port_connections[local_port] = []
-                    port_connections[local_port].append(conn)
-            
-            # Show each port and its connections
-            if port_connections:
-                for port in sorted(port_connections.keys()):
-                    lines.append(f"  {port}:")
-                    for conn in port_connections[port]:
-                        lines.append(f"    └─ {conn['remote_device']} [{conn['mac']}]")
-            else:
-                lines.append("  No connections found")
-            lines.append("")
-        
-        # Summary section
-        lines.append("NETWORK SUMMARY")
-        lines.append("-" * 15)
-        lines.append(f"Total devices: {len(self.devices_data)}")
-        lines.append(f"Devices with names: {len(self.mac_name_map)}")
-        lines.append(f"MAC-to-IP mappings: {len(self.mac_ip_map)}")
-        lines.append(f"MAC-to-port mappings: {len(self.mac_port_map)}")
-        lines.append("")
-        
-        # Identify edge routers
-        edge_routers = self._identify_edge_routers()
-        if edge_routers:
-            lines.append("EDGE ROUTERS (Public IP Addresses)")
-            lines.append("-" * 35)
-            for device, public_ips in edge_routers.items():
-                lines.append(f"  • {device}:")
-                for ip in public_ips[:3]:  # Show first 3 IPs
-                    lines.append(f"    └─ {ip}")
-                if len(public_ips) > 3:
-                    lines.append(f"    └─ ... and {len(public_ips) - 3} more public IPs")
-            lines.append("")
-        
-        # Device listing with names
-        lines.append("DEVICE LISTING")
-        lines.append("-" * 14)
+        device_port_endpoints = self._build_device_port_endpoints()
         managed_identity_ip_map = self._build_known_identity_ip_map()
-        grouped_devices = defaultdict(list)
-        for mac, name in self.mac_name_map.items():
-            if mac == "00:00:00:00:00:00":
-                continue
-            clean_name = self._clean_name(name)
-            ip = self.mac_ip_map.get(mac, managed_identity_ip_map.get(clean_name, "Unknown IP"))
-            grouped_devices[(clean_name, ip)].append(mac)
+        edge_routers = self._identify_edge_routers()
+        connected_devices = sorted(
+            self._clean_name(device_data.get("device_info", {}).get("identity", hostname))
+            for hostname, device_data in self.devices_data.items()
+            if device_data.get("connected", False)
+        )
+        root_devices = sorted(edge_routers.keys()) or connected_devices[:1]
+        remaining_devices = [
+            device_name for device_name in connected_devices
+            if device_name not in root_devices
+        ]
 
-        for (name, ip), macs in sorted(grouped_devices.items(), key=lambda item: (item[0][0].lower(), item[0][1], item[1][0])):
-            if len(macs) == 1:
-                lines.append(f"  • {name} [{macs[0]}] ({ip})")
-            else:
-                lines.append(f"  • {name} ({ip})")
-                lines.append(f"    MACs: {', '.join(sorted(macs)[:5])}")
+        lines = []
+        lines.append("NETWORK TOPOLOGY")
+        lines.append("================")
         lines.append("")
-        
-        # Show complete port mapping for each device
-        lines.append("COMPLETE PORT MAPPINGS")
-        lines.append("-" * 22)
-        for device_name in sorted(self.topology_graph.keys()):
-            lines.append(f"{device_name}:")
-            # Group by port
-            port_map = {}
-            if device_name in self.topology_graph:
-                for conn in self.topology_graph[device_name]:
-                    port = conn.get('local_port', 'unknown')
-                    if port not in port_map:
-                        port_map[port] = []
-                    port_map[port].append(conn)
-            
-            if port_map:
-                for port in sorted(port_map.keys()):
-                    lines.append(f"  {port}:")
-                    for conn in port_map[port]:
-                        lines.append(f"    └─ → {conn['remote_device']} [{conn['mac']}]")
+
+        globally_rendered = set()
+
+        for root_index, root_device in enumerate(root_devices):
+            if root_device in globally_rendered:
+                continue
+
+            root_ip = managed_identity_ip_map.get(root_device, "Unknown IP")
+            header = f"{root_device} ({root_ip})"
+            public_ips = edge_routers.get(root_device, [])
+            if public_ips:
+                header += f" WAN: {', '.join(public_ips[:3])}"
+
+            lines.append(header)
+            visited_devices = {root_device}
+            tree_lines = self._render_device_tree(
+                root_device,
+                device_port_endpoints,
+                visited_devices,
+            )
+            if tree_lines:
+                lines.extend(tree_lines)
             else:
-                lines.append("  No connections")
+                lines.append("└─ no port data")
             lines.append("")
-        
-        # End devices
-        end_devices = self.identify_end_devices()
-        if end_devices:
-            lines.append("END DEVICES (Single Interface)")
-            lines.append("-" * 28)
-            for device in end_devices[:10]:  # Show more end devices
-                lines.append(f"  • {device['name']} - {device['physical_interface']}")
-                if device['mac_addresses']:
-                    lines.append(f"    MACs: {', '.join(device['mac_addresses'][:5])}")
-            lines.append("")
-        
-        # Highlight physical interface names
-        lines.append("INTERFACE NAME VALIDATION")
-        lines.append("-" * 25)
-        lines.append("✅ All connections use actual physical interface names")
-        lines.append("✅ No abstract names like \"bridge1\" shown")
-        lines.append("✅ Interface types: ether, sfp, wifi, etc.")
-        lines.append("")
-        
+            globally_rendered.update(visited_devices)
+
+        unattached_devices = [
+            device_name
+            for device_name in remaining_devices
+            if device_name not in globally_rendered
+        ]
+        if unattached_devices:
+            lines.append("UNREACHED MANAGED DEVICES")
+            lines.append("------------------------")
+            for device_name in unattached_devices:
+                device_ip = managed_identity_ip_map.get(device_name, "Unknown IP")
+                lines.append(f"{device_name} ({device_ip})")
+                tree_lines = self._render_device_tree(
+                    device_name,
+                    device_port_endpoints,
+                    {device_name},
+                )
+                if tree_lines:
+                    lines.extend(tree_lines)
+                else:
+                    lines.append("└─ no port data")
+                lines.append("")
+
         # Write to file
         try:
             output_dir = os.path.dirname(output_file)
@@ -511,11 +586,11 @@ class TopologyBuilder:
             with open(output_file, 'w') as f:
                 f.write('\n'.join(lines))
             logger.info(f"Topology output saved to {output_file}")
-            print(f"Refactored topology saved to: {output_file}")
+            print(f"Topology saved to: {output_file}")
         except Exception as e:
             logger.error(f"Failed to save topology output to {output_file}: {e}")
     
-    def build_complete_topology(self, data_file: str, output_file: str = "data/refactored_topology.txt"):
+    def build_complete_topology(self, data_file: str, output_file: str = "data/topology.txt"):
         """
         Execute the complete topology building process.
         
@@ -532,10 +607,7 @@ class TopologyBuilder:
         self.build_mac_ip_map()
         self.build_ip_name_map()
         self.build_mac_port_map()
-        
-        # Build topology relationships
-        self.build_topology_relations()
-        
+
         # Generate output
         self.generate_topology_output(output_file)
         
@@ -545,9 +617,9 @@ def main():
     """Example usage of the TopologyBuilder."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Build refactored network topology from collected Mikrotik data")
+    parser = argparse.ArgumentParser(description="Build network topology from collected MikroTik data")
     parser.add_argument("input_file", help="JSON file with collected device data")
-    parser.add_argument("-o", "--output", default="data/refactored_topology.txt", help="Output file for topology")
+    parser.add_argument("-o", "--output", default="data/topology.txt", help="Output file for topology")
     
     args = parser.parse_args()
     
@@ -556,7 +628,7 @@ def main():
     
     # Build topology
     if builder.build_complete_topology(args.input_file, args.output):
-        print(f"Successfully built refactored topology in {args.output}")
+        print(f"Successfully built topology in {args.output}")
     else:
         print("Failed to build topology")
 
