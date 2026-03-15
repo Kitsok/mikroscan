@@ -78,10 +78,54 @@ class TestMikrotikSSHClient(unittest.TestCase):
         self.assertEqual(entries[0]["interface"], "ether1")
         self.assertEqual(entries[1]["mac_address"], "AA:BB:CC:DD:EE:FF")
 
+    def test_get_interfaces_merges_ethernet_poe_details(self):
+        interface_stdout = (
+            ' 0 name="ether1-WAN" type=ether mac-address=AA:BB:CC:DD:EE:01\n'
+            '\n'
+            ' 1 name=bridge type=bridge mac-address=AA:BB:CC:DD:EE:FF\n'
+        )
+        ethernet_stdout = (
+            ' 0 name="ether1-WAN" poe-out=auto-on poe-out-status=powered-on '
+            'poe-out-power=12.5W\n'
+        )
+        poe_monitor_stdout = (
+            "name: ether1-WAN\n"
+            "poe-out: auto-on\n"
+            "poe-out-status: powered-on\n"
+            "poe-out-power: 12.5W\n"
+            "poe-out-voltage: 53.2V\n"
+            "\n"
+            "name: ether2\n"
+            "poe-out: off\n"
+            "poe-out-status: disabled\n"
+        )
+        client = RecordingSSHClient({
+            "/interface print detail": (interface_stdout, "", 0),
+            "/interface ethernet print detail": (ethernet_stdout, "", 0),
+            "/interface ethernet poe monitor ether1-WAN once": (poe_monitor_stdout, "", 0),
+        })
+
+        interfaces = client.get_interfaces()
+
+        self.assertEqual(
+            client.commands,
+            [
+                "/interface print detail",
+                "/interface ethernet print detail",
+                "/interface ethernet poe monitor ether1-WAN once",
+            ],
+        )
+        self.assertEqual(len(interfaces), 2)
+        self.assertEqual(interfaces[0]["name"], "ether1-WAN")
+        self.assertEqual(interfaces[0]["poe_out"], "auto-on")
+        self.assertEqual(interfaces[0]["poe_out_power"], "12.5W")
+        self.assertEqual(interfaces[0]["poe_out_voltage"], "53.2V")
+
     def test_detects_routeros_error_text(self):
         client = MikrotikSSHClient(hostname="192.168.1.1", username="admin", password="password")
 
         self.assertTrue(client._looks_like_command_error("expected end of command (line 1 column 36)\n"))
+        self.assertTrue(client._looks_like_command_error("Script Error: missing value(s) of argument(s) in (:find; line 1)\n"))
         self.assertFalse(client._looks_like_command_error(" 0 address=192.168.1.10 mac-address=00:11:22:33:44:55\n"))
 
 

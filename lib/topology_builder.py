@@ -358,6 +358,31 @@ class TopologyBuilder:
             return f" [vlan {vlan_id}]"
         return ""
 
+    def _get_poe_label(self, interface_data: Dict[str, Any]) -> str:
+        """Return a display suffix for Ethernet ports providing PoE output."""
+        if interface_data.get("type", "").lower() != "ether":
+            return ""
+
+        poe_power = (
+            interface_data.get("poe_out_power")
+            or interface_data.get("poe_out_power_w")
+            or ""
+        )
+        if poe_power:
+            return f" [PoE: {poe_power}]"
+
+        poe_status = (interface_data.get("poe_out_status") or "").lower()
+        active_statuses = {
+            "powered-on",
+            "delivering-power",
+            "waiting-for-load",
+            "searching-for-load",
+        }
+        if poe_status in active_statuses:
+            return f" [PoE: {interface_data.get('poe_out_status')}]"
+
+        return ""
+
     def _format_interface_label(
         self,
         interface_name: str,
@@ -374,6 +399,7 @@ class TopologyBuilder:
             label += f" [{mac_address}]"
 
         label += self._get_vlan_label(interface_name, interface_data)
+        label += self._get_poe_label(interface_data)
         return label
 
     def _build_wan_port_overrides(

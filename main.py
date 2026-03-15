@@ -107,7 +107,7 @@ class MikrotikMapper:
             credentials_file_exists = os.path.exists(self.credential_manager.credentials_file)
             prompted_credentials = None
 
-            if credentials_file_exists:
+            if credentials_file_exists and not self.credential_manager.cipher_suite:
                 # Authenticate with master password
                 if not self.credential_manager.authenticate():
                     logger.error("Failed to authenticate with master password")

@@ -148,6 +148,7 @@ class MikrotikSSHClient:
         error_prefixes = (
             "expected end of command",
             "bad command name",
+            "script error:",
             "syntax error",
             "failure:",
             "input does not match any value",
@@ -208,6 +209,68 @@ class MikrotikSSHClient:
             key = match.group(1).strip().replace('*', '').replace('-', '_')
             value = match.group(2) if match.group(2) is not None else match.group(3).strip()
             target_dict[key] = value
+
+    def _parse_detail_records(self, stdout: str) -> List[Dict]:
+        """Parse RouterOS `print detail` output into a list of dictionaries."""
+        records = []
+        current_record = {}
+
+        if not stdout:
+            return records
+
+        for line in stdout.strip().split('\n'):
+            line = line.strip()
+
+            if not line:
+                if current_record:
+                    records.append(current_record)
+                    current_record = {}
+                continue
+
+            if line.startswith('Flags:') or line.startswith('Columns:'):
+                continue
+
+            if line.startswith(';;;'):
+                continue
+
+            self._parse_key_value_line(line, current_record)
+
+        if current_record:
+            records.append(current_record)
+
+        return records
+
+    def _parse_colon_records(self, stdout: str) -> List[Dict]:
+        """Parse RouterOS monitor output with `key: value` lines."""
+        records = []
+        current_record = {}
+
+        if not stdout:
+            return records
+
+        for raw_line in stdout.strip().split('\n'):
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            if ":" not in line:
+                continue
+
+            key, value = line.split(":", 1)
+            key = key.strip().replace('-', '_').replace(' ', '_')
+            value = value.strip()
+
+            # A new `name:` line starts the next monitor record.
+            if key == "name" and current_record:
+                records.append(current_record)
+                current_record = {}
+
+            current_record[key] = value
+
+        if current_record:
+            records.append(current_record)
+
+        return records
     
     def get_device_info(self) -> Dict:
         """
@@ -257,36 +320,30 @@ class MikrotikSSHClient:
             List[Dict]: List of interface information
         """
         interfaces = []
-        
-        # Get interface information
+
         stdout, _, _ = self.execute_command("/interface print detail")
-        if stdout:
-            # Parse interfaces
-            current_interface = {}
-            for line in stdout.strip().split('\n'):
-                line = line.strip()
-                
-                # Empty line indicates end of current interface
-                if not line:
-                    if current_interface:
-                        interfaces.append(current_interface)
-                        current_interface = {}
-                    continue
-                
-                # Skip header lines
-                if line.startswith('Flags:') or line.startswith('Columns:'):
-                    continue
-                
-                # Skip comment lines
-                if line.startswith(';;;'):
-                    continue
-                
-                # Parse key=value pairs from the line
-                self._parse_key_value_line(line, current_interface)
-            
-            # Add last interface if exists
-            if current_interface:
-                interfaces.append(current_interface)
+        interfaces = self._parse_detail_records(stdout)
+
+        ethernet_stdout, _, _ = self.execute_command("/interface ethernet print detail")
+        ethernet_interfaces = self._parse_detail_records(ethernet_stdout)
+        if ethernet_interfaces and interfaces:
+            interfaces_by_name = {
+                interface.get("name"): interface
+                for interface in interfaces
+                if interface.get("name")
+            }
+
+            for ethernet_interface in ethernet_interfaces:
+                interface_name = ethernet_interface.get("name")
+                if interface_name and interface_name in interfaces_by_name:
+                    interfaces_by_name[interface_name].update(ethernet_interface)
+                    if "poe_out" in ethernet_interface:
+                        poe_stdout, _, _ = self.execute_command(
+                            f"/interface ethernet poe monitor {interface_name} once"
+                        )
+                        poe_monitors = self._parse_colon_records(poe_stdout)
+                        if poe_monitors:
+                            interfaces_by_name[interface_name].update(poe_monitors[0])
         
         return interfaces
     

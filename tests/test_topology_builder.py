@@ -20,7 +20,13 @@ def test_generate_topology_output_builds_rooted_tree():
             "connected": True,
             "device_info": {"identity": "Root"},
             "interfaces": [
-                {"name": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+                {
+                    "name": "ether1",
+                    "type": "ether",
+                    "mac_address": "AA:AA:AA:AA:AA:01",
+                    "poe_out": "auto-on",
+                    "poe_out_power": "12.5W",
+                },
                 {"name": "ether2", "mac_address": "AA:AA:AA:AA:AA:02"},
                 {"name": "ether3", "mac_address": "AA:AA:AA:AA:AA:03"},
                 {"name": "WAN-VLAN6", "type": "vlan", "mac_address": "AA:AA:AA:AA:AA:01"},
@@ -93,7 +99,7 @@ def test_generate_topology_output_builds_rooted_tree():
     assert "NETWORK TOPOLOGY" in output
     assert "Root (1.1.1.1)" in output
     assert "WAN:" not in output
-    assert "├─ ether1 [AA:AA:AA:AA:AA:01]" in output
+    assert "├─ ether1 [AA:AA:AA:AA:AA:01] [PoE: 12.5W]" in output
     assert "│  └─ WAN-VLAN6 [AA:AA:AA:AA:AA:01] [vlan 6]" in output
     assert "│     └─ WAN-pppoe (8.8.8.8/32)" in output
     assert "Branch (192.168.0.2) [BB:BB:BB:BB:BB:01]" in output
