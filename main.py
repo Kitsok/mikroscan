@@ -21,6 +21,8 @@ from lib.topology_builder import TopologyBuilder
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+DEFAULT_DATA_FILE = "data/collected_data.json"
+DEFAULT_SCAN_FILE = "data/scan_results.json"
 
 class MikrotikMapper:
     """Main application class for Mikrotik network mapping."""
@@ -203,7 +205,8 @@ class MikrotikMapper:
         logger.info("Connection map building complete")
         return connection_map
     
-    def generate_topology(self, data_file: str, output_file: str = "data/topology.txt"):
+    def generate_topology(self, data_file: str = DEFAULT_DATA_FILE,
+                          output_file: str = "data/topology.txt"):
         """
         Generate network topology from collected data.
         
@@ -285,9 +288,9 @@ Examples:
   python3 main.py 192.168.1.0/24 -u admin -p password
   
   # Use existing scan results
-  python3 main.py --scan-file data/scan_results.json -u admin -p password
+  python3 main.py --scan-file -u admin -p password
   
-  # Use existing collected data
+  # Build map from existing collected data
   python3 main.py --data-file data/collected_data.json
   
   # Generate network topology
@@ -311,13 +314,14 @@ Examples:
     # Input file options
     parser.add_argument(
         "--scan-file",
-        help="Use existing scan results file"
+        nargs="?",
+        const=DEFAULT_SCAN_FILE,
+        help="Use existing scan results file (default: data/scan_results.json)"
     )
     
     parser.add_argument(
         "--data-file",
-        default="data/collected_data.json",
-        help="Use existing collected data file (default: data/collected_data.json)"
+        help="Use existing collected data file"
     )
     
     parser.add_argument(
@@ -460,36 +464,29 @@ Examples:
         mapper = MikrotikMapper()
         logger.info("Generating network topology")
         mapper.generate_topology(
-            data_file=args.data_file,
+            data_file=args.data_file or DEFAULT_DATA_FILE,
             output_file="data/topology.txt"
         )
         return
     
     # Create mapper
     mapper = MikrotikMapper()
-    
-    # Authenticate for operations that need stored credentials
-    if not args.username and not args.password and not args.key_file:
+
+    needs_live_collection = bool(args.ip_range or args.scan_file)
+
+    # Authenticate only for operations that need live SSH collection
+    if needs_live_collection and not args.username and not args.password and not args.key_file:
         # Try to authenticate with master password to use stored credentials
         if not mapper.credential_manager.authenticate():
             print("Authentication failed. Cannot access stored credentials.")
             sys.exit(1)
     
     # Get password if needed and not provided
-    if (args.ip_range or args.scan_file) and args.username and not args.password and not args.key_file:
+    if needs_live_collection and args.username and not args.password and not args.key_file:
         args.password = getpass.getpass("SSH Password: ")
     
     try:
-        if args.data_file:
-            # Directly build map from existing data
-            logger.info("Building map from existing data file")
-            connection_map = mapper.build_map(
-                data_file=args.data_file,
-                output_file=args.output,
-                readable_file=args.readable_output
-            )
-            
-        elif args.scan_file:
+        if args.scan_file:
             # Collect data and build map
             logger.info("Collecting data and building map from scan file")
             connection_map = mapper.collect_data(
@@ -504,20 +501,12 @@ Examples:
             
             if connection_map:
                 connection_map = mapper.build_map(
-                    data_file="data/collected_data.json",
+                    data_file=DEFAULT_DATA_FILE,
                     output_file=args.output,
-                    readable_file="data/connections.txt"
+                    readable_file=args.readable_output
                 )
-                
-        elif args.generate_topology:
-            # Generate network topology
-            logger.info("Generating network topology")
-            mapper.generate_topology(
-                data_file=args.data_file,
-                output_file="data/topology.txt"
-            )
-                
-        else:
+
+        elif args.ip_range:
             # Run full workflow
             logger.info("Running full network mapping workflow")
             connection_map = mapper.run_full_mapping(
@@ -528,6 +517,16 @@ Examples:
                 port=args.ssh_port,
                 timeout=args.timeout,
                 verbose=args.verbose
+            )
+
+        else:
+            # Directly build map from existing data
+            data_file = args.data_file or DEFAULT_DATA_FILE
+            logger.info("Building map from existing data file")
+            connection_map = mapper.build_map(
+                data_file=data_file,
+                output_file=args.output,
+                readable_file=args.readable_output
             )
         
         # Display summary
