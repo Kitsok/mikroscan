@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test for SSH port routing fix.
+Test for SSH port routing fix and verbose mode.
 """
 
 import sys
@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from main import MikrotikMapper
 
-class TestPortRouting(unittest.TestCase):
-    """Test SSH port routing fix."""
+class TestFeatures(unittest.TestCase):
+    """Test features including SSH port routing and verbose mode."""
     
     @patch('data.data_collector.DataCollector')
     @patch('scanner.network_scanner.NetworkScanner.scan_for_mikrotik_devices')
@@ -72,13 +72,48 @@ class TestPortRouting(unittest.TestCase):
             print(f"✓ Port routing test passed - port correctly passed to collector")
         else:
             print("✓ Port routing test executed")
+    
+    @patch('scanner.network_scanner.NetworkScanner')
+    def test_verbose_mode_scanner_creation(self, mock_scanner_class):
+        """Test that verbose mode is passed to NetworkScanner."""
+        # Mock scanner instance
+        mock_scanner_instance = MagicMock()
+        mock_scanner_instance.scan_for_mikrotik_devices.return_value = [
+            {"ip": "192.168.1.1", "hostname": "router1", "type": "mikrotik"}
+        ]
+        mock_scanner_class.return_value = mock_scanner_instance
+        
+        # Create mapper
+        mapper = MikrotikMapper()
+        
+        # Call scan_network with verbose=True
+        result = mapper.scan_network(
+            ip_range="192.168.1.0/24",
+            verbose=True
+        )
+        
+        # Verify that NetworkScanner was instantiated with verbose=True
+        self.assertTrue(mock_scanner_class.called)
+        call_args = mock_scanner_class.call_args
+        if call_args:
+            args, kwargs = call_args
+            self.assertIn('verbose', kwargs)
+            self.assertTrue(kwargs['verbose'])
+            print("✓ Verbose mode test passed - verbose parameter correctly passed to scanner")
+        else:
+            print("✓ Verbose mode test executed")
 
 if __name__ == "__main__":
-    print("Running SSH Port Routing Fix Tests...")
+    print("Running Feature Tests (SSH Port Routing and Verbose Mode)...")
     
-    try:
-        unittest.main(argv=[''], exit=False, verbosity=2)
-        print("\nSSH Port Routing Fix tests completed! ✓")
-    except Exception as e:
-        print(f"\nSSH Port Routing Fix test failed: {e}")
+    # Run tests
+    suite = unittest.TestLoader().loadTestsFromTestCase(TestFeatures)
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    
+    if result.wasSuccessful():
+        print("\nAll feature tests completed successfully! ✓")
+        sys.exit(0)
+    else:
+        print(f"\n{len(result.failures)} failures, {len(result.errors)} errors")
         sys.exit(1)

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class CredentialManager:
     """Manages encrypted storage and retrieval of SSH credentials."""
     
-    def __init__(self, credentials_file: str = "credentials.encrypted"):
+    def __init__(self, credentials_file: str = "data/credentials.encrypted"):
         """
         Initialize the credential manager.
         
@@ -166,9 +166,25 @@ class CredentialManager:
             logger.error(f"Failed to store credentials for {hostname}: {e}")
             return False
     
+    def store_default_credentials(self, username: str, password: str = None, 
+                                 key_file: str = None) -> bool:
+        """
+        Store default SSH credentials for all hosts.
+        
+        Args:
+            username (str): SSH username
+            password (str, optional): SSH password
+            key_file (str, optional): Path to private key file
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        return self.store_credentials("__default__", username, password, key_file)
+    
     def retrieve_credentials(self, hostname: str) -> dict:
         """
         Retrieve SSH credentials for a specific host.
+        Falls back to default credentials if host-specific credentials not found.
         
         Args:
             hostname (str): Hostname or IP address
@@ -183,22 +199,37 @@ class CredentialManager:
         # Load all credentials
         credentials = self.load_all_credentials()
         
-        if hostname not in credentials:
-            logger.warning(f"No credentials found for {hostname}")
-            return {}
+        # Check for host-specific credentials first
+        if hostname in credentials:
+            try:
+                # Decrypt credential data
+                encrypted_cred = base64.b64decode(credentials[hostname])
+                decrypted_cred = self.cipher_suite.decrypt(encrypted_cred)
+                cred_data = json.loads(decrypted_cred.decode())
+                
+                logger.debug(f"Host-specific credentials for {hostname} retrieved successfully")
+                return cred_data
+                
+            except Exception as e:
+                logger.error(f"Failed to retrieve credentials for {hostname}: {e}")
+                return {}
         
-        try:
-            # Decrypt credential data
-            encrypted_cred = base64.b64decode(credentials[hostname])
-            decrypted_cred = self.cipher_suite.decrypt(encrypted_cred)
-            cred_data = json.loads(decrypted_cred.decode())
-            
-            logger.debug(f"Credentials for {hostname} retrieved successfully")
-            return cred_data
-            
-        except Exception as e:
-            logger.error(f"Failed to retrieve credentials for {hostname}: {e}")
-            return {}
+        # Fall back to default credentials
+        if "__default__" in credentials:
+            try:
+                # Decrypt default credential data
+                encrypted_cred = base64.b64decode(credentials["__default__"])
+                decrypted_cred = self.cipher_suite.decrypt(encrypted_cred)
+                cred_data = json.loads(decrypted_cred.decode())
+                
+                logger.debug(f"Default credentials retrieved for {hostname}")
+                return cred_data
+                
+            except Exception as e:
+                logger.error(f"Failed to retrieve default credentials: {e}")
+        
+        logger.warning(f"No credentials found for {hostname}")
+        return {}
     
     def load_all_credentials(self) -> dict:
         """

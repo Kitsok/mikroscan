@@ -14,21 +14,21 @@ import sys
 import threading
 from typing import List, Dict, Set
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class NetworkScanner:
     """Network scanner for finding active hosts and identifying Mikrotik devices."""
     
-    def __init__(self, timeout: int = 5):
+    def __init__(self, timeout: int = 5, verbose: bool = False):
         """
         Initialize the network scanner.
         
         Args:
             timeout (int): Timeout for network operations in seconds
+            verbose (bool): Enable verbose output
         """
         self.timeout = timeout
+        self.verbose = verbose
         self.active_hosts = []
         self.mikrotik_devices = []
     
@@ -49,12 +49,28 @@ class NetworkScanner:
             else:
                 cmd = ['ping', '-c', '1', '-W', str(self.timeout), ip]
             
+            if self.verbose:
+                logger.info(f"Pinging {ip}...")
+            
             result = subprocess.run(cmd, capture_output=True, timeout=self.timeout + 1)
-            return result.returncode == 0
+            success = result.returncode == 0
+            
+            if self.verbose:
+                if success:
+                    logger.info(f"Host {ip} is responsive")
+                else:
+                    logger.info(f"Host {ip} is not responsive")
+            
+            return success
         except subprocess.TimeoutExpired:
+            if self.verbose:
+                logger.info(f"Timeout pinging {ip}")
             return False
         except Exception as e:
-            logger.debug(f"Error pinging {ip}: {e}")
+            if self.verbose:
+                logger.info(f"Error pinging {ip}: {e}")
+            else:
+                logger.debug(f"Error pinging {ip}: {e}")
             return False
     
     def scan_range(self, ip_range: str) -> List[str]:
@@ -81,10 +97,16 @@ class NetworkScanner:
         for i, ip in enumerate(network.hosts()):
             if self.ping_host(str(ip)):
                 active_hosts.append(str(ip))
-                logger.debug(f"Found active host: {ip}")
+                if self.verbose:
+                    logger.info(f"Found active host: {ip}")
+                else:
+                    logger.debug(f"Found active host: {ip}")
             
             # Progress indicator for larger networks
             if (i + 1) % 50 == 0:
+                logger.info(f"Progress: {i + 1}/{total_hosts} hosts scanned")
+            elif self.verbose and (i + 1) % 10 == 0:
+                # More frequent updates in verbose mode
                 logger.info(f"Progress: {i + 1}/{total_hosts} hosts scanned")
         
         logger.info(f"Scan complete. Found {len(active_hosts)} active hosts.")
@@ -101,19 +123,31 @@ class NetworkScanner:
         Returns:
             bool: True if likely a Mikrotik device, False otherwise
         """
+        if self.verbose:
+            logger.info(f"Checking {ip} for Mikrotik characteristics...")
+        
         try:
             # Try to get banner or check for common Mikrotik ports
             # Port 8291 is commonly used by Winbox (Mikrotik management tool)
+            if self.verbose:
+                logger.info(f"  Testing port 8291 (Winbox) on {ip}...")
+            
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(self.timeout)
             result = sock.connect_ex((ip, 8291))
             sock.close()
             
             if result == 0:
-                logger.debug(f"Mikrotik service detected on {ip}:8291")
+                if self.verbose:
+                    logger.info(f"  Mikrotik service detected on {ip}:8291")
+                else:
+                    logger.debug(f"Mikrotik service detected on {ip}:8291")
                 return True
                 
             # Check for HTTP server that might be RouterOS
+            if self.verbose:
+                logger.info(f"  Testing port 80 (HTTP) on {ip}...")
+            
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(self.timeout)
             result = sock.connect_ex((ip, 80))
@@ -121,11 +155,17 @@ class NetworkScanner:
             
             if result == 0:
                 # Could do HTTP header check here for more accuracy
-                logger.debug(f"Potential Mikrotik device detected on {ip}")
+                if self.verbose:
+                    logger.info(f"  Potential Mikrotik device detected on {ip} (HTTP server found)")
+                else:
+                    logger.debug(f"Potential Mikrotik device detected on {ip}")
                 return True
                 
         except Exception as e:
-            logger.debug(f"Error checking {ip} for Mikrotik characteristics: {e}")
+            if self.verbose:
+                logger.info(f"  Error checking {ip} for Mikrotik characteristics: {e}")
+            else:
+                logger.debug(f"Error checking {ip} for Mikrotik characteristics: {e}")
             
         return False
     
@@ -147,7 +187,11 @@ class NetworkScanner:
         logger.info(f"Checking {len(active_hosts)} active hosts for Mikrotik devices...")
         
         for i, ip in enumerate(active_hosts):
-            logger.debug(f"Checking {ip} for Mikrotik characteristics ({i+1}/{len(active_hosts)})")
+            if self.verbose:
+                logger.info(f"Checking {ip} for Mikrotik characteristics ({i+1}/{len(active_hosts)})")
+            else:
+                logger.debug(f"Checking {ip} for Mikrotik characteristics ({i+1}/{len(active_hosts)})")
+            
             if self.identify_mikrotik(ip):
                 device_info = {
                     "ip": ip,

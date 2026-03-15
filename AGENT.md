@@ -15,6 +15,32 @@
   - Confirmed `--ssh-port` option appears in help output
   - Code changes verified in source files
 
+## Feature Requests
+- ✅ Add verbose mode, particularly for scanning process
+  - Added `-v, --verbose` command line option
+  - Updated NetworkScanner to accept verbose parameter
+  - Enhanced scanning process with detailed output in verbose mode
+  - Modified ping_host, scan_range, identify_mikrotik, and scan_for_mikrotik_devices methods
+  - Updated run_full_mapping to pass verbose parameter through the chain
+  - Added verbose documentation to README.md
+  - Added test case in tests/test_features.py
+
+- ✅ Add flexible credential management
+  - One default pair of credentials for all routers
+  - Ability to override login/password for specific hosts
+  - Added `--store-default-credentials` command line option
+  - Updated CredentialManager to support default credentials with fallback
+  - Modified credential retrieval to prioritize host-specific over default credentials
+  - Added documentation to README.md
+  - Added test cases in tests/test_default_credentials.py
+
+- ✅ Organize all created files into separate "data" directory
+  - Created data directory for all file operations
+  - Moved existing data files to data directory
+  - Updated code to use data directory for all file operations
+  - Updated documentation and tests
+  - Removed old data files from root directory
+
 ## Initial Setup
 Created AGENT.md file for tracking agent development progress.
 

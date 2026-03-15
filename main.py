@@ -13,12 +13,11 @@ import sys
 from typing import List
 
 from scanner.network_scanner import NetworkScanner
-from data.data_collector import DataCollector
+from data_collector import DataCollector
 from mapping.connection_mapper import ConnectionMapper
 from credential_manager import CredentialManager
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class MikrotikMapper:
@@ -31,8 +30,8 @@ class MikrotikMapper:
         self.mapper = None
         self.credential_manager = CredentialManager()
         
-    def scan_network(self, ip_range: str, output_file: str = "mikrotik_devices.json", 
-                     timeout: int = 5) -> List[dict]:
+    def scan_network(self, ip_range: str, output_file: str = "data/mikrotik_devices.json", 
+                     timeout: int = 5, verbose: bool = False) -> List[dict]:
         """
         Scan network for Mikrotik devices.
         
@@ -40,20 +39,21 @@ class MikrotikMapper:
             ip_range (str): IP range to scan (CIDR notation)
             output_file (str): File to save scan results
             timeout (int): Timeout for network operations
+            verbose (bool): Enable verbose output
             
         Returns:
             List[dict]: List of discovered Mikrotik devices
         """
         logger.info(f"Scanning network range: {ip_range}")
         
-        self.scanner = NetworkScanner(timeout=timeout)
+        self.scanner = NetworkScanner(timeout=timeout, verbose=verbose)
         devices = self.scanner.scan_for_mikrotik_devices(ip_range, output_file)
         
         logger.info(f"Scan complete. Found {len(devices)} potential Mikrotik devices.")
         return devices
     
     def collect_data(self, device_file: str, username: str = None, password: str = None,
-                     key_file: str = None, output_file: str = "device_data.json",
+                     key_file: str = None, output_file: str = "data/device_data.json",
                      port: int = 22, timeout: int = 10) -> dict:
         """
         Collect data from Mikrotik devices.
@@ -136,7 +136,7 @@ class MikrotikMapper:
         logger.info("Data collection complete")
         return data
     
-    def build_map(self, data_file: str, output_file: str = "connection_map.json",
+    def build_map(self, data_file: str, output_file: str = "data/connection_map.json",
                   readable_file: str = "connections.txt") -> dict:
         """
         Build connection map from collected data.
@@ -175,7 +175,8 @@ class MikrotikMapper:
         return connection_map
     
     def run_full_mapping(self, ip_range: str, username: str = None, password: str = None,
-                         key_file: str = None, port: int = 22, timeout: int = 5) -> dict:
+                         key_file: str = None, port: int = 22, timeout: int = 5,
+                         verbose: bool = False) -> dict:
         """
         Run complete network mapping workflow.
         
@@ -186,6 +187,7 @@ class MikrotikMapper:
             key_file (str, optional): Private key file
             port (int): SSH port (default: 22)
             timeout (int): Timeout for operations
+            verbose (bool): Enable verbose output
             
         Returns:
             dict: Final connection map
@@ -195,8 +197,9 @@ class MikrotikMapper:
         # Step 1: Scan network
         devices = self.scan_network(
             ip_range=ip_range,
-            output_file="scan_results.json",
-            timeout=timeout
+            output_file="data/scan_results.json",
+            timeout=timeout,
+            verbose=verbose
         )
         
         if not devices:
@@ -205,20 +208,20 @@ class MikrotikMapper:
         
         # Step 2: Collect data
         data = self.collect_data(
-            device_file="scan_results.json",
+            device_file="data/scan_results.json",
             username=username,
             password=password,
             key_file=key_file,
-            output_file="collected_data.json",
+            output_file="data/collected_data.json",
             port=port,
             timeout=timeout + 5  # Give more time for data collection
         )
         
         # Step 3: Build map
         connection_map = self.build_map(
-            data_file="collected_data.json",
-            output_file="final_map.json",
-            readable_file="connections.txt"
+            data_file="data/collected_data.json",
+            output_file="data/final_map.json",
+            readable_file="data/connections.txt"
         )
         
         logger.info("Full network mapping workflow complete")
@@ -271,6 +274,12 @@ Examples:
     )
     
     parser.add_argument(
+        "--store-default-credentials",
+        action="store_true",
+        help="Store default credentials for all hosts"
+    )
+    
+    parser.add_argument(
         "--hostname",
         help="Hostname or IP address for credential storage"
     )
@@ -306,6 +315,12 @@ Examples:
         help="Network timeout in seconds (default: 10)"
     )
     
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose output, particularly for scanning process"
+    )
+    
     # Output options
     parser.add_argument(
         "-o", "--output",
@@ -320,6 +335,12 @@ Examples:
     )
     
     args = parser.parse_args()
+    
+    # Set up logging level based on verbose flag
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
     
     # Handle credential storage
     if args.store_credentials:
@@ -342,9 +363,26 @@ Examples:
             print("Failed to set master password")
         return
     
-    # Validate arguments for mapping operations
-    if not args.ip_range and not args.scan_file and not args.data_file:
-        parser.error("Either IP range, scan file, or data file must be provided")
+    # Handle default credential storage
+    if args.store_default_credentials:
+        if not args.username:
+            parser.error("--store-default-credentials requires --username")
+        
+        # Get password if not provided
+        password = args.password
+        if not password and not args.key_file:
+            password = getpass.getpass("SSH Password: ")
+        
+        # Create credential manager and store default credentials
+        cred_manager = CredentialManager()
+        if cred_manager.set_master_password():
+            if cred_manager.store_default_credentials(args.username, password, args.key_file):
+                print("Default credentials stored successfully")
+            else:
+                print("Failed to store default credentials")
+        else:
+            print("Failed to set master password")
+        return
     
     # Create mapper
     mapper = MikrotikMapper()
@@ -378,16 +416,16 @@ Examples:
                 username=args.username,
                 password=args.password,
                 key_file=args.key_file,
-                output_file="collected_data.json",
+                output_file="data/collected_data.json",
                 port=args.ssh_port,
                 timeout=args.timeout
             )
             
             if connection_map:
                 connection_map = mapper.build_map(
-                    data_file="collected_data.json",
+                    data_file="data/collected_data.json",
                     output_file=args.output,
-                    readable_file=args.readable_output
+                    readable_file="data/connections.txt"
                 )
                 
         else:
@@ -399,7 +437,8 @@ Examples:
                 password=args.password,
                 key_file=args.key_file,
                 port=args.ssh_port,
-                timeout=args.timeout
+                timeout=args.timeout,
+                verbose=args.verbose
             )
         
         # Display summary

@@ -31,12 +31,52 @@ Scan a network range and map connections:
 python3 main.py 192.168.1.0/24 -u admin -p password
 ```
 
+All output files will be stored in the `data/` directory:
+- `data/scan_results.json`: Discovered Mikrotik devices
+- `data/collected_data.json`: Raw device data
+- `data/final_map.json`: Structured JSON connection map
+- `data/connections.txt`: Human-readable connection descriptions
+- `data/credentials.encrypted`: Encrypted SSH credentials
+
 ### Network Mapping with Custom SSH Port
 
 Scan and map connections using a custom SSH port:
 ```bash
 python3 main.py --ssh-port 10021 192.168.1.0/24 -u admin -p password
 ```
+
+### Network Mapping with Verbose Output
+
+Scan with detailed output showing the scanning process:
+```bash
+python3 main.py -v 192.168.1.0/24 -u admin -p password
+```
+
+### Storing Default Credentials
+
+Store default credentials for all routers:
+```bash
+python3 main.py --store-default-credentials -u admin -p password
+```
+
+### Storing Host-Specific Credentials
+
+Store credentials for a specific host (overrides default):
+```bash
+python3 main.py --store-credentials --hostname 192.168.1.1 -u admin -p password
+```
+
+### Using Stored Credentials
+
+Run mapping without specifying credentials (will use default or host-specific credentials):
+```bash
+python3 main.py 192.168.1.0/24
+```
+
+The tool will:
+1. Use host-specific credentials if stored for a particular router
+2. Fall back to default credentials if no host-specific credentials are found
+3. Prompt for credentials if neither default nor host-specific credentials are available
 
 ### Using Stored Credentials
 
@@ -54,12 +94,12 @@ python3 main.py 192.168.1.0/24
 
 Use previously collected scan results:
 ```bash
-python3 main.py --scan-file scan_results.json -u admin -p password
+python3 main.py --scan-file data/scan_results.json -u admin -p password
 ```
 
 Use previously collected device data:
 ```bash
-python3 main.py --data-file collected_data.json
+python3 main.py --data-file data/collected_data.json
 ```
 
 ## Running Tests
@@ -90,11 +130,12 @@ python3 tests/test_main.py
 
 ## Output Files
 
-- `final_map.json`: Structured JSON connection map
-- `connections.txt`: Human-readable connection descriptions
-- `scan_results.json`: Discovered Mikrotik devices (when scanning)
-- `collected_data.json`: Raw device data (when collecting)
-- `credentials.encrypted`: Encrypted SSH credentials (when storing)
+All files are stored in the `data/` directory:
+- `data/final_map.json`: Structured JSON connection map
+- `data/connections.txt`: Human-readable connection descriptions
+- `data/scan_results.json`: Discovered Mikrotik devices (when scanning)
+- `data/collected_data.json`: Raw device data (when collecting)
+- `data/credentials.encrypted`: Encrypted SSH credentials (when storing)
 
 ## Security
 
