@@ -105,31 +105,50 @@ class ConnectionMapper:
         """
         connections = []
         bridge_ports = device_data.get("bridge_ports", [])
+        bridge_hosts = device_data.get("bridge_hosts", [])
         interfaces = device_data.get("interfaces", [])
-        
-        # Create interface lookup by name
-        interface_lookup = {iface.get("name"): iface for iface in interfaces}
-        
-        for port in bridge_ports:
-            interface_name = port.get("interface")
-            if not interface_name:
+
+        valid_ports = {
+            port.get("interface")
+            for port in bridge_ports
+            if port.get("interface")
+        }
+
+        local_macs = {
+            (iface.get("mac_address") or iface.get("link_layer_address") or "").upper()
+            for iface in interfaces
+            if iface.get("mac_address") or iface.get("link_layer_address")
+        }
+
+        seen_connections = set()
+
+        for host in bridge_hosts:
+            interface_name = host.get("interface")
+            mac_address = (host.get("mac_address") or "").upper()
+
+            if not interface_name or not mac_address:
                 continue
-            
-            # Get interface details
-            interface = interface_lookup.get(interface_name, {})
-            
-            # Look for MAC address to identify what's connected
-            mac_address = interface.get("mac_address") or interface.get("link_layer_address")
-            if mac_address:
-                # This could be another device or a host
-                connection = {
-                    "source_device": device_id,
-                    "source_interface": interface_name,
-                    "mac_address": mac_address,
-                    "type": "bridge_port"
-                }
-                connections.append(connection)
-        
+
+            if valid_ports and interface_name not in valid_ports:
+                continue
+
+            # Ignore MACs owned by the local device. Using interface MACs here
+            # creates false "connected to itself" links.
+            if mac_address in local_macs:
+                continue
+
+            connection_key = (interface_name, mac_address)
+            if connection_key in seen_connections:
+                continue
+            seen_connections.add(connection_key)
+
+            connections.append({
+                "source_device": device_id,
+                "source_interface": interface_name,
+                "mac_address": mac_address,
+                "type": "bridge_port"
+            })
+
         return connections
     
     def _process_hosts(self):
