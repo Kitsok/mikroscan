@@ -130,16 +130,38 @@ class TopologyBuilder:
         dns_map = {}
         dhcp_map = {}
         neighbor_map = {}
-        
-        # Process DNS static entries (highest priority)
+
+        dns_ip_map = {}
+
+        # Process DNS static entries into IP-to-name mappings first. RouterOS
+        # DNS static records typically provide name/address pairs, not MACs.
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
                 continue
-                
+
             for dns_entry in device_data.get("dns_static", []):
-                mac = dns_entry.get("mac_address", "").upper()
+                ip = dns_entry.get("address", "")
                 name = dns_entry.get("name", "")
+                if ip and name:
+                    dns_ip_map[ip] = name
+
+        # Resolve DNS names to MACs through DHCP and ARP IP associations.
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            for dhcp_entry in device_data.get("dhcp_leases", []):
+                mac = dhcp_entry.get("mac_address", "").upper()
+                ip = dhcp_entry.get("active_address") or dhcp_entry.get("address", "")
+                name = dns_ip_map.get(ip, "")
                 if mac and name:
+                    dns_map[mac] = name
+
+            for arp_entry in device_data.get("arp_table", []):
+                mac = arp_entry.get("mac_address", "").upper()
+                ip = arp_entry.get("address", "")
+                name = dns_ip_map.get(ip, "")
+                if mac and name and mac not in dns_map:
                     dns_map[mac] = name
         
         # Process DHCP leases (medium priority)
