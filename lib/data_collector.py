@@ -6,6 +6,7 @@ Coordinates data gathering from multiple Mikrotik devices.
 
 import json
 import logging
+import os
 from typing import Dict, List, Any
 
 from lib.mikrotik_ssh import MikrotikSSHClient
@@ -148,6 +149,9 @@ class DataCollector:
             data = self.collected_data
         
         try:
+            output_dir = os.path.dirname(filename)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
             with open(filename, 'w') as f:
                 json.dump(data, f, indent=2, default=str)
             logger.info(f"Data saved to {filename}")

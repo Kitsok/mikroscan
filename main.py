@@ -190,6 +190,9 @@ class MikrotikMapper:
         # Generate and save readable output
         descriptions = self.mapper.generate_readable_output()
         try:
+            output_dir = os.path.dirname(readable_file)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
             with open(readable_file, 'w') as f:
                 for desc in descriptions:
                     f.write(desc + '\n')
@@ -537,6 +540,9 @@ class MikrotikMapper:
         
         # Write to file
         try:
+            output_dir = os.path.dirname(output_file)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
             with open(output_file, 'w') as f:
                 f.write('\n'.join(topology_lines))
             logger.info(f"Topology diagram saved to {output_file}")

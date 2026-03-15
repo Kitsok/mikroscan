@@ -274,6 +274,10 @@ class CredentialManager:
             raise Exception("Master password not set")
         
         try:
+            output_dir = os.path.dirname(self.credentials_file)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+
             # Use the salt that was generated during set_master_password
             if hasattr(self, '_current_salt'):
                 salt = self._current_salt

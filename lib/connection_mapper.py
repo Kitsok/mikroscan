@@ -6,6 +6,7 @@ Processes collected data and builds connection relationships.
 
 import json
 import logging
+import os
 from typing import Dict, List, Set, Tuple, Any
 
 # Set up logging
@@ -277,6 +278,9 @@ class ConnectionMapper:
             connection_map = self.connection_map
         
         try:
+            output_dir = os.path.dirname(filename)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
             with open(filename, 'w') as f:
                 json.dump(connection_map, f, indent=2, default=str)
             logger.info(f"Connection map saved to {filename}")

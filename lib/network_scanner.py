@@ -8,6 +8,7 @@ import argparse
 import ipaddress
 import json
 import logging
+import os
 import socket
 import subprocess
 import sys
@@ -234,6 +235,9 @@ class NetworkScanner:
             filename (str): Output file path
         """
         try:
+            output_dir = os.path.dirname(filename)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
             with open(filename, 'w') as f:
                 json.dump(devices, f, indent=2)
             logger.info(f"Results saved to {filename}")

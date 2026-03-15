@@ -6,6 +6,7 @@ Implements the new approach based on neighbors, DHCP, DNS, and bridge host data.
 
 import json
 import logging
+import os
 from typing import Dict, List, Set, Tuple, Any
 from collections import defaultdict
 
@@ -447,6 +448,9 @@ class TopologyBuilder:
         
         # Write to file
         try:
+            output_dir = os.path.dirname(output_file)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
             with open(output_file, 'w') as f:
                 f.write('\n'.join(lines))
             logger.info(f"Topology output saved to {output_file}")
