@@ -124,6 +124,42 @@ def test_generate_readable_output():
     assert "ether2 on router1 is connected to host host1" in descriptions
     print("✓ generate_readable_output test passed")
 
+def test_generate_readable_output_uses_host_metadata_for_bridge_ports():
+    """Test readable bridge-port output falls back to host metadata."""
+    mapper = ConnectionMapper()
+
+    mapper.connection_map = {
+        "devices": {
+            "router1": {
+                "hostname": "192.168.1.1",
+                "info": {"identity": "router1"}
+            }
+        },
+        "connections": [
+            {
+                "source_device": "router1",
+                "source_interface": "ether1",
+                "mac_address": "00:11:22:33:44:55",
+                "type": "bridge_port"
+            }
+        ],
+        "hosts": {
+            "00:11:22:33:44:55": {
+                "mac_address": "00:11:22:33:44:55",
+                "hostname": "host1",
+                "ip_addresses": ["192.168.1.50"],
+                "seen_on_devices": ["router1"]
+            }
+        }
+    }
+
+    descriptions = mapper.generate_readable_output()
+
+    assert descriptions == [
+        "ether1 on router1 is connected to host host1 [00:11:22:33:44:55]"
+    ]
+    print("✓ readable bridge host metadata test passed")
+
 def test_host_connections_use_bridge_host_interface():
     """Test host connections resolve their interface from bridge host data."""
     mapper = ConnectionMapper()
@@ -207,6 +243,7 @@ def main():
         test_set_and_load_data()
         test_save_and_load_map()
         test_generate_readable_output()
+        test_generate_readable_output_uses_host_metadata_for_bridge_ports()
         test_host_connections_use_bridge_host_interface()
         test_managed_devices_are_not_added_as_hosts()
         

@@ -380,9 +380,21 @@ class ConnectionMapper:
                         f"{source_interface} on {source_device} is connected to device {destination_device} [{mac_address}]"
                     )
                 else:
-                    descriptions.append(
-                        f"{source_interface} on {source_device} is connected to device with MAC {mac_address}"
-                    )
+                    host = self.connection_map.get("hosts", {}).get(mac_address, {})
+                    host_label = host.get("hostname")
+                    if not host_label:
+                        ip_addresses = host.get("ip_addresses", [])
+                        if ip_addresses:
+                            host_label = ip_addresses[0]
+
+                    if host_label:
+                        descriptions.append(
+                            f"{source_interface} on {source_device} is connected to host {host_label} [{mac_address}]"
+                        )
+                    else:
+                        descriptions.append(
+                            f"{source_interface} on {source_device} is connected to device with MAC {mac_address}"
+                        )
             
             elif conn_type == "host_connection":
                 source_device = connection.get("source_device", "unknown")
