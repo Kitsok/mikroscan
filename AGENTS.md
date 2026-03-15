@@ -7,8 +7,8 @@
 3. Never push to the repository
 
 ## Repository Conventions
-- Use `AGENT.md` as the authoritative repository instruction file.
-- Do not rely on `AGENTS.md` for repository-specific instructions.
+- Use `AGENTS.md` as the authoritative repository instruction file.
+- Do not rely on `AGENT.md` for repository-specific instructions.
 - Wrap commit message bodies to a reasonable line length (target 72 chars).
 
 ## Bug Fixes
@@ -115,7 +115,7 @@
 - **Performance Optimized**: Minimal overhead, integrated with existing topology workflow
 
 ## Initial Setup
-Created AGENT.md file for tracking agent development progress.
+Created AGENTS.md file for tracking agent development progress.
 
 ## Project Requirements
 Network mapping tool for Mikrotik devices:
