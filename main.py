@@ -31,6 +31,20 @@ class MikrotikMapper:
         self.collector = None
         self.mapper = None
         self.credential_manager = CredentialManager()
+
+    def _prompt_ssh_credentials(self) -> dict:
+        """Prompt interactively for SSH credentials for the current run."""
+        username = input("SSH Username: ").strip()
+        if not username:
+            logger.error("SSH username is required")
+            return {}
+
+        password = getpass.getpass("SSH Password: ")
+        return {
+            "username": username,
+            "password": password,
+            "key_file": None,
+        }
         
     def scan_network(self, ip_range: str, output_file: str = "data/mikrotik_devices.json", 
                      timeout: int = 5, verbose: bool = False) -> List[dict]:
@@ -88,19 +102,36 @@ class MikrotikMapper:
         
         # If no username provided, try to get stored credentials
         if not username:
-            # Authenticate with master password
-            if not self.credential_manager.authenticate():
-                logger.error("Failed to authenticate with master password")
-                return {}
-            
-            # Use stored credentials for each device
+            credentials_file_exists = os.path.exists(self.credential_manager.credentials_file)
+            prompted_credentials = None
+
+            if credentials_file_exists:
+                # Authenticate with master password
+                if not self.credential_manager.authenticate():
+                    logger.error("Failed to authenticate with master password")
+                    return {}
+
+            # Use stored credentials for each device when available and
+            # fall back to a single interactive prompt for the current run.
             all_data = {}
             for hostname in hostnames:
-                # Get stored credentials for this host
-                cred_data = self.credential_manager.retrieve_credentials(hostname)
+                cred_data = {}
+                if credentials_file_exists:
+                    cred_data = self.credential_manager.retrieve_credentials(hostname)
+
                 if not cred_data:
-                    logger.warning(f"No stored credentials for {hostname}, skipping")
-                    continue
+                    if prompted_credentials is None:
+                        logger.warning(
+                            f"No stored credentials available for {hostname}. "
+                            "Prompting for SSH credentials for this run."
+                        )
+                        prompted_credentials = self._prompt_ssh_credentials()
+
+                    if not prompted_credentials:
+                        logger.error("No SSH credentials available for data collection")
+                        return {}
+
+                    cred_data = prompted_credentials
                 
                 # Create data collector with stored credentials
                 self.collector = DataCollector(
