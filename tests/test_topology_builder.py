@@ -105,12 +105,82 @@ def test_generate_topology_output_builds_rooted_tree():
     assert "Branch (192.168.0.2) [BB:BB:BB:BB:BB:01]" in output
     assert "├─ ether2" in output
     assert "│  └─ <ether1> Branch (192.168.0.2) [BB:BB:BB:BB:BB:01]" in output
-    assert "│     └─ wifi1" in output or "   └─ wifi1" in output
+    assert "            └─ wifi1" in output or "         └─ wifi1" in output
     assert "leaf-host (192.168.0.30) [EE:EE:EE:EE:EE:01]" in output
     assert "direct-host (192.168.0.20) [DD:DD:DD:DD:DD:01]" in output
     assert "UNRESOLVED HOSTS" in output
     assert "upstream-host (192.168.0.10) [CC:CC:CC:CC:CC:01]" in output
     print("✓ rooted topology tree test passed")
+
+
+def test_nested_child_device_ports_keep_tree_indentation():
+    """Nested device subtrees should keep tree prefixes, not label-width spacing."""
+    builder = TopologyBuilder()
+    builder.devices_data = {
+        "1.1.1.1": {
+            "hostname": "1.1.1.1",
+            "connected": True,
+            "device_info": {"identity": "Root"},
+            "interfaces": [
+                {"name": "sfp1", "mac_address": "AA:AA:AA:AA:AA:01"},
+            ],
+            "bridge_hosts": [
+                {"interface": "sfp1", "mac_address": "BB:BB:BB:BB:BB:01"},
+            ],
+            "dhcp_leases": [],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "1.1.1.1/24"}],
+            "neighbors": [],
+        },
+        "2.2.2.2": {
+            "hostname": "2.2.2.2",
+            "connected": True,
+            "device_info": {"identity": "ChildWithLongName"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+                {"name": "ether2", "mac_address": "BB:BB:BB:BB:BB:02"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+                {"interface": "ether2", "mac_address": "CC:CC:CC:CC:CC:01"},
+            ],
+            "dhcp_leases": [
+                {
+                    "mac_address": "CC:CC:CC:CC:CC:01",
+                    "active_address": "192.168.0.10",
+                    "host_name": "leaf-host",
+                }
+            ],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "2.2.2.2/24"}],
+            "neighbors": [],
+        },
+    }
+
+    builder.build_mac_name_map()
+    builder.build_mac_ip_map()
+    builder.build_ip_name_map()
+    builder.build_mac_port_map()
+
+    with tempfile.NamedTemporaryFile(mode="r", delete=False) as handle:
+        output_file = handle.name
+
+    try:
+        builder.generate_topology_output(output_file)
+        with open(output_file, "r") as handle:
+            lines = handle.read().splitlines()
+    finally:
+        if os.path.exists(output_file):
+            os.unlink(output_file)
+
+    child_line = next(line for line in lines if "ChildWithLongName" in line)
+    port_line = next(line for line in lines if "ether2 [BB:BB:BB:BB:BB:02]" in line)
+
+    assert child_line.startswith("   └─ <ether1> ChildWithLongName")
+    assert port_line.startswith("            └─ ether2 [BB:BB:BB:BB:BB:02]")
+    print("✓ nested child indentation test passed")
 
 
 def test_generate_topology_output_hides_shared_segment_hosts_behind_single_child():
@@ -188,6 +258,148 @@ def test_generate_topology_output_hides_shared_segment_hosts_behind_single_child
     assert "└─ wifi1 [BB:BB:BB:BB:BB:02]" in output
     assert "UNRESOLVED HOSTS" not in output
     print("✓ shared-segment reduction test passed")
+
+
+def test_shared_segment_child_keeps_vertical_continuation_for_following_host():
+    """A device subtree on a shared segment must preserve the vertical branch."""
+    builder = TopologyBuilder()
+    builder.devices_data = {
+        "1.1.1.1": {
+            "hostname": "1.1.1.1",
+            "connected": True,
+            "device_info": {"identity": "Root"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+                {"interface": "ether1", "mac_address": "CC:CC:CC:CC:CC:01"},
+            ],
+            "dhcp_leases": [
+                {
+                    "mac_address": "CC:CC:CC:CC:CC:01",
+                    "active_address": "192.168.0.50",
+                    "host_name": "segment-host",
+                }
+            ],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "1.1.1.1/24"}],
+            "neighbors": [],
+        },
+        "2.2.2.2": {
+            "hostname": "2.2.2.2",
+            "connected": True,
+            "device_info": {"identity": "Branch"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+                {"name": "wifi1", "mac_address": "BB:BB:BB:BB:BB:02"},
+            ],
+            "bridge_hosts": [
+                {"interface": "wifi1", "mac_address": "DD:DD:DD:DD:DD:01"},
+            ],
+            "dhcp_leases": [
+                {
+                    "mac_address": "DD:DD:DD:DD:DD:01",
+                    "active_address": "192.168.0.60",
+                    "host_name": "wifi-host",
+                }
+            ],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "2.2.2.2/24"}],
+            "neighbors": [],
+        },
+    }
+
+    builder.build_mac_name_map()
+    builder.build_mac_ip_map()
+    builder.build_ip_name_map()
+    builder.build_mac_port_map()
+
+    with tempfile.NamedTemporaryFile(mode="r", delete=False) as handle:
+        output_file = handle.name
+
+    try:
+        builder.generate_topology_output(output_file)
+        with open(output_file, "r") as handle:
+            output = handle.read()
+    finally:
+        if os.path.exists(output_file):
+            os.unlink(output_file)
+
+    assert "└─ [shared segment]" in output
+    assert "   ├─ <ether1> Branch (2.2.2.2) [BB:BB:BB:BB:BB:01]" in output
+    assert "   │           └─ wifi1 [BB:BB:BB:BB:BB:02]" in output
+    assert "   └─ segment-host (192.168.0.50) [CC:CC:CC:CC:CC:01]" in output
+    print("✓ shared-segment child continuation test passed")
+
+
+def test_device_bridge_mac_endpoint_uses_reciprocal_physical_port_label():
+    """A managed device seen via its bridge MAC should still show the uplink port."""
+    builder = TopologyBuilder()
+    builder.devices_data = {
+        "1.1.1.1": {
+            "hostname": "1.1.1.1",
+            "connected": True,
+            "device_info": {"identity": "Root"},
+            "interfaces": [
+                {"name": "ether7", "mac_address": "AA:AA:AA:AA:AA:07"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether7", "mac_address": "BB:BB:BB:BB:BB:00"},
+            ],
+            "dhcp_leases": [],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "1.1.1.1/24"}],
+            "neighbors": [],
+        },
+        "2.2.2.2": {
+            "hostname": "2.2.2.2",
+            "connected": True,
+            "device_info": {"identity": "Branch"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+                {"name": "LAN", "type": "bridge", "mac_address": "BB:BB:BB:BB:BB:00"},
+                {"name": "wifi1", "mac_address": "BB:BB:BB:BB:BB:02"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "AA:AA:AA:AA:AA:07"},
+                {"interface": "wifi1", "mac_address": "CC:CC:CC:CC:CC:01"},
+            ],
+            "dhcp_leases": [
+                {
+                    "mac_address": "CC:CC:CC:CC:CC:01",
+                    "active_address": "192.168.0.30",
+                    "host_name": "leaf-host",
+                }
+            ],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "2.2.2.2/24"}],
+            "neighbors": [],
+        },
+    }
+
+    builder.build_mac_name_map()
+    builder.build_mac_ip_map()
+    builder.build_ip_name_map()
+    builder.build_mac_port_map()
+
+    with tempfile.NamedTemporaryFile(mode="r", delete=False) as handle:
+        output_file = handle.name
+
+    try:
+        builder.generate_topology_output(output_file)
+        with open(output_file, "r") as handle:
+            output = handle.read()
+    finally:
+        if os.path.exists(output_file):
+            os.unlink(output_file)
+
+    assert "<ether1> Branch (2.2.2.2) [BB:BB:BB:BB:BB:00]" in output
+    print("✓ reciprocal remote-port label test passed")
 
 
 def test_generate_topology_output_marks_multi_device_ports_as_shared_segments():

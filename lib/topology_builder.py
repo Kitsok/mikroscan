@@ -859,10 +859,31 @@ class TopologyBuilder:
         return ""
 
     def _get_display_remote_port(self, endpoint: Dict[str, Any]) -> str:
-        """Return a remote port label only when it is a physical interface."""
+        """Return the explicit remote port label when it is physical."""
         remote_port = endpoint.get("remote_port", "")
         if self._is_physical_interface(remote_port):
             return remote_port
+        return ""
+
+    def _resolve_display_remote_port(
+        self,
+        endpoint: Dict[str, Any],
+        parent_name: str,
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+    ) -> str:
+        """Return the best physical remote port label for display."""
+        remote_port = self._get_display_remote_port(endpoint)
+        if remote_port:
+            return remote_port
+
+        reciprocal_port = self._find_upstream_port(
+            endpoint["name"],
+            parent_name,
+            device_port_endpoints,
+        )
+        if self._is_physical_interface(reciprocal_port):
+            return reciprocal_port
+
         return ""
 
     def _resolve_child_upstream_port(
@@ -886,14 +907,13 @@ class TopologyBuilder:
 
         return remote_port
 
-    def _format_endpoint_label(self, endpoint: Dict[str, Any]) -> str:
+    def _format_endpoint_label(self, endpoint: Dict[str, Any], remote_port: str = "") -> str:
         """Format a device or host endpoint for topology output."""
         label = endpoint["name"]
         ip = endpoint.get("ip", "")
         mac = endpoint["mac"]
 
         if endpoint["type"] == "device":
-            remote_port = self._get_display_remote_port(endpoint)
             if remote_port:
                 label = f"<{remote_port}> {label}"
             if ip and ip != "Unknown IP":
@@ -903,6 +923,12 @@ class TopologyBuilder:
         if ip and ip != "Unknown IP" and ip != label:
             return f"{label} ({ip}) [{mac}]"
         return f"{label} [{mac}]"
+
+    def _get_child_prefix(self, endpoint_prefix: str, remote_port: str = "") -> str:
+        """Align nested child-device ports with the child device name."""
+        base_padding = " " * 3
+        remote_padding = f"<{remote_port}> " if remote_port else ""
+        return endpoint_prefix + base_padding + (" " * len(remote_padding))
 
     def _build_host_candidates(self) -> Dict[str, Dict[str, Any]]:
         """Build host records from collected data for unresolved-node output."""
@@ -1066,16 +1092,22 @@ class TopologyBuilder:
 
                 if endpoint["type"] == "device":
                     child_name = endpoint["name"]
+                    display_remote_port = self._resolve_display_remote_port(
+                        endpoint,
+                        device_name,
+                        device_port_endpoints,
+                    )
                     if child_name in visited_devices:
                         lines.append(
                             f"{endpoint_prefix_base}{endpoint_connector} "
-                            f"{self._format_endpoint_label(endpoint)} [already shown]"
+                            f"{self._format_endpoint_label(endpoint, display_remote_port)} "
+                            "[already shown]"
                         )
                         continue
 
                     lines.append(
                         f"{endpoint_prefix_base}{endpoint_connector} "
-                        f"{self._format_endpoint_label(endpoint)}"
+                        f"{self._format_endpoint_label(endpoint, display_remote_port)}"
                     )
                     visited_devices.add(child_name)
                     child_upstream_port = self._resolve_child_upstream_port(
@@ -1083,19 +1115,23 @@ class TopologyBuilder:
                         device_name,
                         device_port_endpoints,
                     )
+                    child_prefix = self._get_child_prefix(
+                        endpoint_prefix,
+                        display_remote_port,
+                    )
                     child_lines = self._render_device_tree(
                         child_name,
                         device_port_endpoints,
                         visited_devices,
                         rendered_host_macs=rendered_host_macs,
                         upstream_port=child_upstream_port,
-                        prefix=endpoint_prefix,
+                        prefix=child_prefix,
                         device_port_labels=device_port_labels,
                     )
                     if child_lines:
                         lines.extend(child_lines)
                     else:
-                        lines.append(f"{endpoint_prefix}└─ no downstream endpoints")
+                        lines.append(f"{child_prefix}└─ no downstream endpoints")
                     continue
 
                 rendered_host_macs.add(endpoint["mac"])
