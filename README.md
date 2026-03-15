@@ -54,14 +54,24 @@ python3 main.py -v 192.168.1.0/24 -u admin -p password
 
 ### Storing Default Credentials
 
-Store default credentials for all routers:
+Store default credentials for all routers (will prompt for username/password):
+```bash
+python3 main.py --store-default-credentials
+```
+
+Or provide credentials directly:
 ```bash
 python3 main.py --store-default-credentials -u admin -p password
 ```
 
 ### Storing Host-Specific Credentials
 
-Store credentials for a specific host (overrides default):
+Store credentials for a specific host (will prompt for username/password):
+```bash
+python3 main.py --store-credentials --hostname 192.168.1.1
+```
+
+Or provide credentials directly:
 ```bash
 python3 main.py --store-credentials --hostname 192.168.1.1 -u admin -p password
 ```

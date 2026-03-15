@@ -81,6 +81,12 @@
   - Removed Python cache directories
   - Maintained only essential source files and documentation
 
+- ✅ Enhance credential storage prompts
+  - Make --store-default-credentials prompt for username and password
+  - Make --store-credentials prompt for username and password
+  - Improve user experience for credential management
+  - Updated help text and examples
+
 ## Initial Setup
 Created AGENT.md file for tracking agent development progress.
 

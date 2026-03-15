@@ -376,8 +376,11 @@ Examples:
   # Generate network topology diagram
   python3 main.py --generate-topology --data-file data/collected_data.json
   
-  # Store credentials for later use
-  python3 main.py --store-credentials --hostname 192.168.1.1 -u admin -p password
+  # Store default credentials (will prompt for username/password)
+  python3 main.py --store-default-credentials
+  
+  # Store credentials for specific host (will prompt for username/password)
+  python3 main.py --store-credentials --hostname 192.168.1.1
         """
     )
     
@@ -426,7 +429,7 @@ Examples:
     # SSH authentication
     parser.add_argument(
         "-u", "--username",
-        help="SSH username for Mikrotik devices"
+        help="SSH username for Mikrotik devices (will prompt if not provided with --store-* options)"
     )
     
     parser.add_argument(
@@ -483,8 +486,15 @@ Examples:
     
     # Handle credential storage
     if args.store_credentials:
-        if not args.hostname or not args.username:
-            parser.error("--store-credentials requires --hostname and --username")
+        if not args.hostname:
+            parser.error("--store-credentials requires --hostname")
+        
+        # Get username if not provided
+        username = args.username
+        if not username:
+            username = input("SSH Username: ").strip()
+            if not username:
+                parser.error("--store-credentials requires username")
         
         # Get password if not provided
         password = args.password
@@ -494,7 +504,7 @@ Examples:
         # Create credential manager and store credentials
         cred_manager = CredentialManager()
         if cred_manager.set_master_password():
-            if cred_manager.store_credentials(args.hostname, args.username, password, args.key_file):
+            if cred_manager.store_credentials(args.hostname, username, password, args.key_file):
                 print(f"Credentials for {args.hostname} stored successfully")
             else:
                 print(f"Failed to store credentials for {args.hostname}")
@@ -504,8 +514,12 @@ Examples:
     
     # Handle default credential storage
     if args.store_default_credentials:
-        if not args.username:
-            parser.error("--store-default-credentials requires --username")
+        # Get username if not provided
+        username = args.username
+        if not username:
+            username = input("SSH Username: ").strip()
+            if not username:
+                parser.error("--store-default-credentials requires username")
         
         # Get password if not provided
         password = args.password
@@ -515,7 +529,7 @@ Examples:
         # Create credential manager and store default credentials
         cred_manager = CredentialManager()
         if cred_manager.set_master_password():
-            if cred_manager.store_default_credentials(args.username, password, args.key_file):
+            if cred_manager.store_default_credentials(username, password, args.key_file):
                 print("Default credentials stored successfully")
             else:
                 print("Failed to store default credentials")
