@@ -34,14 +34,14 @@ class MikrotikMapper:
         self.mapper = None
         self.credential_manager = CredentialManager()
 
-    def _prompt_ssh_credentials(self) -> dict:
-        """Prompt interactively for SSH credentials for the current run."""
-        username = input("SSH Username: ").strip()
+    def _prompt_device_credentials(self) -> dict:
+        """Prompt interactively for device credentials for the current run."""
+        username = input("Device Username: ").strip()
         if not username:
-            logger.error("SSH username is required")
+            logger.error("Device username is required")
             return {}
 
-        password = getpass.getpass("SSH Password: ")
+        password = getpass.getpass("Device Password: ")
         return {
             "username": username,
             "password": password,
@@ -72,7 +72,8 @@ class MikrotikMapper:
     
     def collect_data(self, device_file: str, username: str = None, password: str = None,
                      key_file: str = None, output_file: str = "data/device_data.json",
-                     port: int = 22, timeout: int = 10) -> dict:
+                     port: int = 8728, timeout: int = 10, backend: str = "api",
+                     use_api_ssl: bool = False) -> dict:
         """
         Collect data from Mikrotik devices.
         
@@ -82,8 +83,10 @@ class MikrotikMapper:
             password (str, optional): SSH password
             key_file (str, optional): Private key file
             output_file (str): File to save collected data
-            port (int): SSH port
+            port (int): Backend port
             timeout (int): Connection timeout
+            backend (str): Collection backend
+            use_api_ssl (bool): Use TLS with the RouterOS API backend
             
         Returns:
             dict: Collected device data
@@ -125,12 +128,12 @@ class MikrotikMapper:
                     if prompted_credentials is None:
                         logger.warning(
                             f"No stored credentials available for {hostname}. "
-                            "Prompting for SSH credentials for this run."
+                            "Prompting for device credentials for this run."
                         )
-                        prompted_credentials = self._prompt_ssh_credentials()
+                        prompted_credentials = self._prompt_device_credentials()
 
                     if not prompted_credentials:
-                        logger.error("No SSH credentials available for data collection")
+                        logger.error("No device credentials available for data collection")
                         return {}
 
                     cred_data = prompted_credentials
@@ -139,7 +142,9 @@ class MikrotikMapper:
                 self.collector = DataCollector(
                     username=cred_data.get("username", ""),
                     password=cred_data.get("password"),
-                    key_filename=cred_data.get("key_file")
+                    key_filename=cred_data.get("key_file"),
+                    backend=backend,
+                    use_ssl=use_api_ssl,
                 )
                 
                 # Collect data from this device
@@ -152,7 +157,9 @@ class MikrotikMapper:
             self.collector = DataCollector(
                 username=username,
                 password=password,
-                key_filename=key_file
+                key_filename=key_file,
+                backend=backend,
+                use_ssl=use_api_ssl,
             )
             
             # Collect data
@@ -225,8 +232,9 @@ class MikrotikMapper:
         return False
     
     def run_full_mapping(self, ip_range: str, username: str = None, password: str = None,
-                         key_file: str = None, port: int = 22, timeout: int = 5,
-                         verbose: bool = False) -> dict:
+                         key_file: str = None, port: int = 8728, timeout: int = 5,
+                         verbose: bool = False, backend: str = "api",
+                         use_api_ssl: bool = False) -> dict:
         """
         Run complete network mapping workflow.
         
@@ -235,9 +243,11 @@ class MikrotikMapper:
             username (str): SSH username
             password (str, optional): SSH password
             key_file (str, optional): Private key file
-            port (int): SSH port (default: 22)
+            port (int): Backend port
             timeout (int): Timeout for operations
             verbose (bool): Enable verbose output
+            backend (str): Collection backend
+            use_api_ssl (bool): Use TLS with the RouterOS API backend
             
         Returns:
             dict: Final connection map
@@ -264,7 +274,9 @@ class MikrotikMapper:
             key_file=key_file,
             output_file="data/collected_data.json",
             port=port,
-            timeout=timeout + 5  # Give more time for data collection
+            timeout=timeout + 5,  # Give more time for data collection
+            backend=backend,
+            use_api_ssl=use_api_ssl,
         )
         
         # Step 3: Build map
@@ -289,6 +301,9 @@ Examples:
   
   # Use existing scan results
   python3 main.py --scan-file -u admin -p password
+
+  # Use native RouterOS API instead of SSH
+  python3 main.py --scan-file --backend api --api-port 8728 -u admin -p password
   
   # Build map from existing collected data
   python3 main.py --data-file data/collected_data.json
@@ -351,12 +366,12 @@ Examples:
     # SSH authentication
     parser.add_argument(
         "-u", "--username",
-        help="SSH username for Mikrotik devices (will prompt if not provided with --store-* options)"
+        help="Device username for MikroTik access (prompted for --store-* if omitted)"
     )
     
     parser.add_argument(
         "-p", "--password",
-        help="SSH password for Mikrotik devices"
+        help="Device password for MikroTik access"
     )
     
     parser.add_argument(
@@ -366,10 +381,39 @@ Examples:
     
     # Network options
     parser.add_argument(
+        "--backend",
+        choices=["ssh", "api"],
+        default="api",
+        help="Collection backend for live device access (default: api)"
+    )
+
+    parser.add_argument(
         "--ssh-port",
         type=int,
         default=22,
         help="SSH port (default: 22)"
+    )
+
+    parser.add_argument(
+        "--api-port",
+        type=int,
+        default=8728,
+        help="RouterOS API port (default: 8728)"
+    )
+
+    parser.add_argument(
+        "--api-ssl",
+        dest="api_ssl",
+        action="store_true",
+        default=False,
+        help="Use TLS for the native RouterOS API backend"
+    )
+
+    parser.add_argument(
+        "--no-api-ssl",
+        dest="api_ssl",
+        action="store_false",
+        help="Disable TLS for the native RouterOS API backend (default)"
     )
     
     parser.add_argument(
@@ -414,14 +458,14 @@ Examples:
         # Get username if not provided
         username = args.username
         if not username:
-            username = input("SSH Username: ").strip()
+            username = input("Device Username: ").strip()
             if not username:
                 parser.error("--store-credentials requires username")
         
         # Get password if not provided
         password = args.password
         if not password and not args.key_file:
-            password = getpass.getpass("SSH Password: ")
+            password = getpass.getpass("Device Password: ")
         
         # Create credential manager and store credentials
         cred_manager = CredentialManager()
@@ -439,14 +483,14 @@ Examples:
         # Get username if not provided
         username = args.username
         if not username:
-            username = input("SSH Username: ").strip()
+            username = input("Device Username: ").strip()
             if not username:
                 parser.error("--store-default-credentials requires username")
         
         # Get password if not provided
         password = args.password
         if not password and not args.key_file:
-            password = getpass.getpass("SSH Password: ")
+            password = getpass.getpass("Device Password: ")
         
         # Create credential manager and store default credentials
         cred_manager = CredentialManager()
@@ -474,7 +518,7 @@ Examples:
 
     needs_live_collection = bool(args.ip_range or args.scan_file)
 
-    # Authenticate only for operations that need live SSH collection
+    # Authenticate only for operations that need live device collection
     if needs_live_collection and not args.username and not args.password and not args.key_file:
         # Try to authenticate with master password to use stored credentials
         if not mapper.credential_manager.authenticate():
@@ -483,27 +527,35 @@ Examples:
     
     # Get password if needed and not provided
     if needs_live_collection and args.username and not args.password and not args.key_file:
-        args.password = getpass.getpass("SSH Password: ")
+        args.password = getpass.getpass("Device Password: ")
+
+    collection_port = args.api_port if args.backend == "api" else args.ssh_port
     
     try:
         if args.scan_file:
             # Collect data and build map
-            logger.info("Collecting data and building map from scan file")
-            connection_map = mapper.collect_data(
+            logger.info("Collecting data, building map, and generating topology from scan file")
+            collected_data = mapper.collect_data(
                 device_file=args.scan_file,
                 username=args.username,
                 password=args.password,
                 key_file=args.key_file,
                 output_file="data/collected_data.json",
-                port=args.ssh_port,
-                timeout=args.timeout
+                port=collection_port,
+                timeout=args.timeout,
+                backend=args.backend,
+                use_api_ssl=args.api_ssl,
             )
             
-            if connection_map:
+            if collected_data:
                 connection_map = mapper.build_map(
                     data_file=DEFAULT_DATA_FILE,
                     output_file=args.output,
                     readable_file=args.readable_output
+                )
+                mapper.generate_topology(
+                    data_file=DEFAULT_DATA_FILE,
+                    output_file="data/topology.txt"
                 )
 
         elif args.ip_range:
@@ -514,9 +566,11 @@ Examples:
                 username=args.username,
                 password=args.password,
                 key_file=args.key_file,
-                port=args.ssh_port,
+                port=collection_port,
                 timeout=args.timeout,
-                verbose=args.verbose
+                verbose=args.verbose,
+                backend=args.backend,
+                use_api_ssl=args.api_ssl,
             )
 
         else:

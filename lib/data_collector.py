@@ -7,8 +7,9 @@ Coordinates data gathering from multiple Mikrotik devices.
 import json
 import logging
 import os
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Type
 
+from lib.mikrotik_api import MikrotikAPIClient
 from lib.mikrotik_ssh import MikrotikSSHClient
 
 # Set up logging
@@ -17,20 +18,54 @@ logger = logging.getLogger(__name__)
 
 class DataCollector:
     """Collects network data from Mikrotik devices."""
-    
-    def __init__(self, username: str, password: str = None, key_filename: str = None):
+
+    CLIENTS: Dict[str, Type] = {
+        "ssh": MikrotikSSHClient,
+        "api": MikrotikAPIClient,
+    }
+
+    def __init__(
+        self,
+        username: str,
+        password: str = None,
+        key_filename: str = None,
+        backend: str = "api",
+        use_ssl: bool = False,
+    ):
         """
         Initialize the data collector.
         
         Args:
-            username (str): SSH username for Mikrotik devices
-            password (str, optional): SSH password
+            username (str): Username for MikroTik device access
+            password (str, optional): Password
             key_filename (str, optional): Path to private key file
+            backend (str): Collection backend (`ssh` or `api`)
+            use_ssl (bool): Whether to use TLS for the API backend
         """
+        if backend not in self.CLIENTS:
+            raise ValueError(f"Unsupported backend: {backend}")
+
         self.username = username
         self.password = password
         self.key_filename = key_filename
+        self.backend = backend
+        self.use_ssl = use_ssl
         self.collected_data = {}
+
+    def _create_client(self, hostname: str, port: int, timeout: int):
+        """Create a backend client for a single device."""
+        client_class = self.CLIENTS[self.backend]
+        kwargs = {
+            "hostname": hostname,
+            "username": self.username,
+            "password": self.password,
+            "key_filename": self.key_filename,
+            "port": port,
+            "timeout": timeout,
+        }
+        if self.backend == "api":
+            kwargs["use_ssl"] = self.use_ssl
+        return client_class(**kwargs)
     
     def collect_from_device(self, hostname: str, port: int = 22, timeout: int = 10) -> Dict:
         """
@@ -38,7 +73,7 @@ class DataCollector:
         
         Args:
             hostname (str): Device hostname or IP address
-            port (int): SSH port (default: 22)
+            port (int): Backend port
             timeout (int): Connection timeout in seconds (default: 10)
             
         Returns:
@@ -46,15 +81,7 @@ class DataCollector:
         """
         logger.info(f"Collecting data from {hostname}")
         
-        # Create SSH client
-        ssh_client = MikrotikSSHClient(
-            hostname=hostname,
-            username=self.username,
-            password=self.password,
-            key_filename=self.key_filename,
-            port=port,
-            timeout=timeout
-        )
+        client = self._create_client(hostname, port, timeout)
         
         device_data = {
             "hostname": hostname,
@@ -71,7 +98,7 @@ class DataCollector:
         }
         
         # Connect to device
-        if not ssh_client.connect():
+        if not client.connect():
             logger.error(f"Failed to connect to {hostname}")
             return device_data
         
@@ -80,19 +107,19 @@ class DataCollector:
 
             logger.debug(f"Getting device info from {hostname}")
             try:
-                device_data["device_info"] = ssh_client.get_device_info()
+                device_data["device_info"] = client.get_device_info()
             except Exception as e:
                 logger.error(f"Failed to collect device info from {hostname}: {e}")
 
             list_getters = [
-                ("interfaces", "interfaces", ssh_client.get_interfaces),
-                ("bridge ports", "bridge_ports", ssh_client.get_bridge_ports),
-                ("ARP table", "arp_table", ssh_client.get_arp_table),
-                ("DHCP leases", "dhcp_leases", ssh_client.get_dhcp_leases),
-                ("neighbors", "neighbors", ssh_client.get_neighbors),
-                ("DNS static entries", "dns_static", ssh_client.get_dns_static_entries),
-                ("bridge host entries", "bridge_hosts", ssh_client.get_bridge_host_entries),
-                ("IP addresses", "ip_addresses", ssh_client.get_ip_addresses),
+                ("interfaces", "interfaces", client.get_interfaces),
+                ("bridge ports", "bridge_ports", client.get_bridge_ports),
+                ("ARP table", "arp_table", client.get_arp_table),
+                ("DHCP leases", "dhcp_leases", client.get_dhcp_leases),
+                ("neighbors", "neighbors", client.get_neighbors),
+                ("DNS static entries", "dns_static", client.get_dns_static_entries),
+                ("bridge host entries", "bridge_hosts", client.get_bridge_host_entries),
+                ("IP addresses", "ip_addresses", client.get_ip_addresses),
             ]
 
             for label, key, getter in list_getters:
@@ -108,7 +135,7 @@ class DataCollector:
         except Exception as e:
             logger.error(f"Error collecting data from {hostname}: {e}")
         finally:
-            ssh_client.disconnect()
+            client.disconnect()
         
         return device_data
     
@@ -118,7 +145,7 @@ class DataCollector:
         
         Args:
             hostnames (List[str]): List of device hostnames or IP addresses
-            port (int): SSH port (default: 22)
+            port (int): Backend port
             timeout (int): Connection timeout in seconds (default: 10)
             
         Returns:
@@ -184,11 +211,30 @@ def main():
     
     parser = argparse.ArgumentParser(description="Collect data from Mikrotik devices")
     parser.add_argument("hostnames", nargs="+", help="Mikrotik device IPs or hostnames")
-    parser.add_argument("-u", "--username", required=True, help="SSH username")
-    parser.add_argument("-p", "--password", help="SSH password")
+    parser.add_argument("-u", "--username", required=True, help="Device username")
+    parser.add_argument("-p", "--password", help="Device password")
     parser.add_argument("-k", "--key-file", help="Private key file")
     parser.add_argument("-o", "--output", help="Output file for collected data")
-    parser.add_argument("--port", type=int, default=22, help="SSH port")
+    parser.add_argument("--port", type=int, default=8728, help="Backend port (default: 8728)")
+    parser.add_argument(
+        "--backend",
+        choices=sorted(DataCollector.CLIENTS),
+        default="api",
+        help="Collection backend (default: api)",
+    )
+    parser.add_argument(
+        "--api-ssl",
+        dest="api_ssl",
+        action="store_true",
+        default=False,
+        help="Use TLS with the RouterOS API backend",
+    )
+    parser.add_argument(
+        "--no-api-ssl",
+        dest="api_ssl",
+        action="store_false",
+        help="Disable TLS with the RouterOS API backend (default)",
+    )
     parser.add_argument("--timeout", type=int, default=10, help="Connection timeout")
     
     args = parser.parse_args()
@@ -197,7 +243,9 @@ def main():
     collector = DataCollector(
         username=args.username,
         password=args.password,
-        key_filename=args.key_file
+        key_filename=args.key_file,
+        backend=args.backend,
+        use_ssl=args.api_ssl,
     )
     
     # Collect data from devices

@@ -14,6 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import main module components
+import main as main_module
 from main import MikrotikMapper
 
 def test_mikrotik_mapper_initialization():
@@ -154,6 +155,47 @@ def test_collect_data_skips_reauth_when_credentials_are_already_unlocked():
             if os.path.exists(file_path):
                 os.unlink(file_path)
 
+
+def test_scan_file_also_generates_topology():
+    """The --scan-file path should regenerate topology after collection."""
+    mock_devices = [{"ip": "192.168.1.1"}]
+
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
+        scan_file = f.name
+        json.dump(mock_devices, f)
+
+    try:
+        with patch.object(sys, "argv", [
+            "main.py",
+            "--scan-file",
+            scan_file,
+            "-u",
+            "testuser",
+            "-p",
+            "testpass",
+        ]), patch("main.MikrotikMapper") as MockMapper:
+            mapper = MockMapper.return_value
+            mapper.collect_data.return_value = {"192.168.1.1": {"connected": True}}
+            mapper.build_map.return_value = {
+                "devices": {},
+                "connections": [],
+                "hosts": [],
+            }
+            mapper.generate_topology.return_value = True
+
+            main_module.main()
+
+        mapper.collect_data.assert_called_once()
+        mapper.build_map.assert_called_once()
+        mapper.generate_topology.assert_called_once_with(
+            data_file="data/collected_data.json",
+            output_file="data/topology.txt",
+        )
+        print("✓ scan-file topology generation test passed")
+    finally:
+        if os.path.exists(scan_file):
+            os.unlink(scan_file)
+
 def main():
     """Run all main application tests."""
     print("Running Main Application Tests...")
@@ -164,7 +206,8 @@ def main():
         test_command_line_default_run()
         test_collect_data_with_mock_files()
         test_collect_data_skips_reauth_when_credentials_are_already_unlocked()
-        
+        test_scan_file_also_generates_topology()
+
         print("\nAll Main Application tests passed! ✓")
         return 0
     except Exception as e:

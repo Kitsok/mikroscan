@@ -55,6 +55,12 @@ class FakeSSHClient:
         return [{"address": "203.0.113.5/24", "interface": "ether1"}]
 
 
+class FakeAPIClient(FakeSSHClient):
+    """Minimal fake RouterOS API client for collection tests."""
+
+    pass
+
+
 class PartiallyFailingSSHClient(FakeSSHClient):
     """Fake SSH client that fails one getter but continues for others."""
 
@@ -70,10 +76,11 @@ class TestDataCollector(unittest.TestCase):
         self.assertEqual(collector.username, "admin")
         self.assertEqual(collector.password, "password")
         self.assertIsNone(collector.key_filename)
+        self.assertEqual(collector.backend, "api")
 
-    @patch("lib.data_collector.MikrotikSSHClient", FakeSSHClient)
+    @patch.dict("lib.data_collector.DataCollector.CLIENTS", {"ssh": FakeSSHClient}, clear=False)
     def test_collect_from_device_collects_all_sections(self):
-        collector = DataCollector(username="admin", password="password")
+        collector = DataCollector(username="admin", password="password", backend="ssh")
         result = collector.collect_from_device("192.168.1.1")
 
         self.assertTrue(result["connected"])
@@ -83,15 +90,36 @@ class TestDataCollector(unittest.TestCase):
         self.assertEqual(len(result["ip_addresses"]), 1)
         self.assertEqual(result["ip_addresses"][0]["address"], "203.0.113.5/24")
 
-    @patch("lib.data_collector.MikrotikSSHClient", PartiallyFailingSSHClient)
+    @patch.dict(
+        "lib.data_collector.DataCollector.CLIENTS",
+        {"ssh": PartiallyFailingSSHClient},
+        clear=False,
+    )
     def test_collect_from_device_continues_after_single_getter_failure(self):
-        collector = DataCollector(username="admin", password="password")
+        collector = DataCollector(username="admin", password="password", backend="ssh")
         result = collector.collect_from_device("192.168.1.1")
 
         self.assertTrue(result["connected"])
         self.assertEqual(result["bridge_hosts"], [])
         self.assertEqual(len(result["ip_addresses"]), 1)
         self.assertEqual(result["ip_addresses"][0]["address"], "203.0.113.5/24")
+
+    @patch.dict("lib.data_collector.DataCollector.CLIENTS", {"api": FakeAPIClient}, clear=False)
+    def test_collect_from_device_supports_api_backend(self):
+        collector = DataCollector(
+            username="admin",
+            password="password",
+            backend="api",
+            use_ssl=True,
+        )
+        result = collector.collect_from_device("192.168.1.1", port=8729)
+
+        self.assertTrue(result["connected"])
+        self.assertEqual(result["device_info"]["identity"], "router1")
+
+    def test_data_collector_rejects_unknown_backend(self):
+        with self.assertRaises(ValueError):
+            DataCollector(username="admin", backend="bogus")
 
     def test_save_and_load_data(self):
         collector = DataCollector(username="admin")
