@@ -182,6 +182,8 @@ class MikrotikMapper:
             data_file (str): JSON file with collected device data
             output_file (str): Output file for topology diagram
         """
+        import re  # Import regex module for parsing
+        
         logger.info(f"Generating network topology diagram from {data_file}")
         
         # Load collected data
@@ -198,7 +200,7 @@ class MikrotikMapper:
         topology_lines.append("=" * 25)
         topology_lines.append("")
         
-        # Separate devices by type
+        # Separate devices by type with better identification
         routers = []
         switches = []
         access_points = []
@@ -210,18 +212,47 @@ class MikrotikMapper:
         for ip, device in data.items():
             if device.get('connected') and 'device_info' in device:
                 identity = device['device_info'].get('identity', ip)
-                model = device['device_info'].get('model', '').lower()
+                model = device['device_info'].get('model', 'Unknown')
                 all_devices.append({'identity': identity, 'ip': ip, 'device': device, 'model': model})
                 
-                # Categorize devices
-                if 'router' in model or 'rb' in model or ip.endswith('.254'):
+                # Categorize devices with more precise matching
+                model_upper = model.upper()
+                identity_lower = identity.lower()
+                
+                if any(router_model in model_upper for router_model in ['RB5009', 'RB4011', 'CCR1036', 'CCR2004', 'ROUTER']):
                     routers.append({'identity': identity, 'ip': ip, 'device': device, 'model': model})
-                elif 'switch' in model or 'crs' in model:
+                elif any(switch_model in model_upper for switch_model in ['CRS', 'CSS', 'CBS', 'SWITCH']):
                     switches.append({'identity': identity, 'ip': ip, 'device': device, 'model': model})
-                elif 'hap' in model or 'wap' in model or 'ap' in identity.lower():
+                elif any(ap_model in model_upper for ap_model in ['HAP', 'WAP', 'CAP']) or 'ap' in identity_lower:
                     access_points.append({'identity': identity, 'ip': ip, 'device': device, 'model': model})
                 else:
                     other_devices.append({'identity': identity, 'ip': ip, 'device': device, 'model': model})
+        
+        # Helper function to correctly parse ARP entries
+        def parse_arp_entry(key, value):
+            """Parse ARP entry to reconstruct full MAC addresses."""
+            # Sample: {"0 DC address=172.20.20.113 mac_address=C4": "0F:08:BE:26:D4 interface=LAN"}
+            
+            # Extract IP from key
+            ip_match = re.search(r'address=([\d\.]+)', key)
+            ip = ip_match.group(1) if ip_match else None
+            
+            # Extract MAC prefix from key
+            mac_prefix_match = re.search(r'mac_address=([0-9A-F]{2})', key)
+            mac_prefix = mac_prefix_match.group(1) if mac_prefix_match else None
+            
+            # Extract MAC suffix from value
+            mac_suffix_match = re.search(r'^([0-9A-F:]{14})', value)
+            mac_suffix = mac_suffix_match.group(1) if mac_suffix_match else None
+            
+            # Reconstruct full MAC if both parts exist
+            full_mac = f"{mac_prefix}:{mac_suffix}" if mac_prefix and mac_suffix else None
+            
+            # Extract interface from value
+            interface_match = re.search(r'interface=([^\s]+)', value)
+            interface = interface_match.group(1) if interface_match else 'unknown'
+            
+            return {'ip': ip, 'mac': full_mac, 'interface': interface} if ip and full_mac else None
         
         # Create topology visualization
         topology_lines.append("Discovered Network Devices:")
@@ -229,68 +260,98 @@ class MikrotikMapper:
         
         if routers:
             topology_lines.append(f"Routers ({len(routers)}):")
-            for router in routers:
+            for router in sorted(routers, key=lambda x: x['identity']):
                 topology_lines.append(f"  • {router['identity']} ({router['ip']}) - {router['model']}")
         
         if switches:
             topology_lines.append(f"Switches ({len(switches)}):")
-            for switch in switches:
+            for switch in sorted(switches, key=lambda x: x['identity']):
                 topology_lines.append(f"  • {switch['identity']} ({switch['ip']}) - {switch['model']}")
         
         if access_points:
             topology_lines.append(f"Access Points ({len(access_points)}):")
-            for ap in access_points:
+            for ap in sorted(access_points, key=lambda x: x['identity']):
                 topology_lines.append(f"  • {ap['identity']} ({ap['ip']}) - {ap['model']}")
         
         if other_devices:
             topology_lines.append(f"Other Devices ({len(other_devices)}):")
-            for device in other_devices:
+            for device in sorted(other_devices, key=lambda x: x['identity']):
                 topology_lines.append(f"  • {device['identity']} ({device['ip']}) - {device['model']}")
         
-        # Analyze connections based on ARP data
+        # Analyze connections based on ARP data with improved parsing
         topology_lines.append("")
         topology_lines.append("Network Connectivity Analysis:")
         topology_lines.append("-" * 30)
         
-        # Find which devices can see the router
-        router_ips = [r['ip'] for r in routers]
-        devices_seeing_router = []
-        
-        for device_info in all_devices:
-            device = device_info['device']
-            if 'arp_table' in device:
-                for entry in device['arp_table']:
-                    entry_str = str(entry)
-                    for router_ip in router_ips:
-                        if router_ip in entry_str:
-                            devices_seeing_router.append(device_info['identity'])
-                            break
-        
-        topology_lines.append(f"Devices that can reach main router: {len(devices_seeing_router)}")
-        if devices_seeing_router:
-            topology_lines.append("  " + ", ".join(sorted(devices_seeing_router)))
+        # Find which devices can see the main router
+        if routers:
+            main_router = routers[0]  # Assume first router is main
+            main_router_ip = main_router['ip']
+            devices_seeing_router = []
+            
+            for device_info in all_devices:
+                device = device_info['device']
+                device_identity = device_info['identity']
+                device_ip = device_info['ip']
+                
+                # Skip the router itself
+                if device_ip == main_router_ip:
+                    continue
+                
+                if 'arp_table' in device:
+                    for arp_entry in device['arp_table']:
+                        if arp_entry:  # Ensure entry exists
+                            entry_key = list(arp_entry.keys())[0]
+                            entry_value = list(arp_entry.values())[0]
+                            parsed_entry = parse_arp_entry(entry_key, entry_value)
+                            
+                            if parsed_entry and parsed_entry['ip'] == main_router_ip:
+                                devices_seeing_router.append(device_identity)
+                                break
+            
+            topology_lines.append(f"Main Router: {main_router['identity']} ({main_router_ip})")
+            topology_lines.append(f"Devices that can reach main router: {len(devices_seeing_router)}")
+            if devices_seeing_router:
+                topology_lines.append("  " + ", ".join(sorted(set(devices_seeing_router))))
+        else:
+            topology_lines.append("No routers detected in network")
         
         # Add inferred network structure
         topology_lines.append("")
         topology_lines.append("Inferred Network Structure:")
         topology_lines.append("-" * 27)
-        topology_lines.append("All devices are on the same subnet and can communicate directly.")
-        topology_lines.append("Physical connections may include intermediate switches not detectable via ARP.")
         
-        # Add intelligent recommendations based on device types
+        if routers:
+            main_router = routers[0]
+            topology_lines.append(f"• {main_router['identity']} ({main_router_ip}) acts as core router")
+        
+        if switches:
+            for switch in switches:
+                topology_lines.append(f"• {switch['identity']} ({switch['ip']}) serves as managed switch")
+        
+        if access_points:
+            ap_count = len(access_points)
+            ap_names = [ap['identity'] for ap in access_points]
+            topology_lines.append(f"• {ap_count} Access Points deployed: {', '.join(sorted(ap_names))}")
+        
+        topology_lines.append("• All devices operate within the same logical subnet")
+        
+        # Add intelligent recommendations based on device types and connections
         topology_lines.append("")
         topology_lines.append("Intelligent Recommendations:")
-        topology_lines.append("-" * 28)
+        topology_lines.append("-" * 26)
         
-        if len(switches) > 0 and len(access_points) > 2:
-            topology_lines.append("• Consider organizing APs through managed switch for better control")
+        if len(switches) == 1 and len(access_points) >= 2:
+            topology_lines.append("• Current switch aggregation of AP connections provides good management")
+        elif len(access_points) > 0:
+            topology_lines.append("• Consider using managed switch to aggregate AP connections")
         
-        if len(routers) == 1:
-            topology_lines.append("• Single router architecture provides centralized network management")
+        if len(routers) >= 1:
+            topology_lines.append("• Centralized routing through main router simplifies network management")
         
-        topology_lines.append("• Use LLDP/CDP protocols for accurate physical topology discovery")
-        topology_lines.append("• Check managed switch interfaces for port-to-port mapping")
-        topology_lines.append("• Physical site survey needed for exact cable connections")
+        topology_lines.append("• Use LLDP/CDP protocols for more accurate physical topology discovery")
+        topology_lines.append("• Document switch port assignments for easier troubleshooting")
+        topology_lines.append("• Monitor bandwidth utilization on key network segments")
         
         # Write to file
         try:
