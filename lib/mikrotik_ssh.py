@@ -6,6 +6,7 @@ Handles SSH connections and command execution on Mikrotik routers.
 
 import logging
 import paramiko
+import re
 import socket
 import time
 from typing import Dict, List, Optional, Tuple
@@ -202,30 +203,11 @@ class MikrotikSSHClient:
             line (str): Line to parse
             target_dict (Dict): Dictionary to add parsed key-value pairs to
         """
-        # Split line into tokens and look for key=value patterns
-        tokens = line.split()
-        for token in tokens:
-            if '=' in token and not token.startswith('=') and not token.endswith('='):
-                # Handle quoted values
-                if '"' in token:
-                    # Find key and quoted value
-                    key_end = token.find('=')
-                    if key_end > 0:
-                        key = token[:key_end].strip().replace('*', '').replace('-', '_')
-                        # Value might be quoted
-                        value_part = token[key_end+1:].strip()
-                        if value_part.startswith('"') and value_part.endswith('"'):
-                            value = value_part[1:-1]  # Remove quotes
-                        else:
-                            value = value_part
-                        target_dict[key] = value
-                else:
-                    # Regular key=value without quotes
-                    parts = token.split('=', 1)
-                    if len(parts) == 2:
-                        key = parts[0].strip().replace('*', '').replace('-', '_')
-                        value = parts[1].strip()
-                        target_dict[key] = value
+        pattern = re.compile(r'([^\s=]+)=(?:"([^"]*)"|(\S+))')
+        for match in pattern.finditer(line):
+            key = match.group(1).strip().replace('*', '').replace('-', '_')
+            value = match.group(2) if match.group(2) is not None else match.group(3).strip()
+            target_dict[key] = value
     
     def get_device_info(self) -> Dict:
         """
