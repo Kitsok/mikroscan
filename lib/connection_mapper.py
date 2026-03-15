@@ -20,6 +20,7 @@ class ConnectionMapper:
         """Initialize the connection mapper."""
         self.devices_data = {}
         self.connection_map = {}
+        self.device_mac_map = {}
     
     def load_data(self, filename: str) -> Dict:
         """
@@ -64,6 +65,7 @@ class ConnectionMapper:
             "connections": [],
             "hosts": {}
         }
+        self.device_mac_map = self._build_device_mac_map()
         
         # Process each device
         for hostname, device_data in self.devices_data.items():
@@ -147,10 +149,27 @@ class ConnectionMapper:
                 "source_device": device_id,
                 "source_interface": interface_name,
                 "mac_address": mac_address,
+                "destination_device": self.device_mac_map.get(mac_address),
                 "type": "bridge_port"
             })
 
         return connections
+
+    def _build_device_mac_map(self) -> Dict[str, str]:
+        """Build a MAC-to-device-name map for collected MikroTik devices."""
+        mac_map = {}
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_id = device_data.get("device_info", {}).get("identity", hostname)
+            for interface in device_data.get("interfaces", []):
+                mac = (interface.get("mac_address") or interface.get("link_layer_address") or "").upper()
+                if mac:
+                    mac_map[mac] = device_id
+
+        return mac_map
     
     def _process_hosts(self):
         """Process ARP table and DHCP leases to identify hosts."""
@@ -308,7 +327,15 @@ class ConnectionMapper:
                 source_device = connection.get("source_device", "unknown")
                 source_interface = connection.get("source_interface", "unknown")
                 mac_address = connection.get("mac_address", "unknown")
-                descriptions.append(f"{source_interface} on {source_device} is connected to device with MAC {mac_address}")
+                destination_device = connection.get("destination_device")
+                if destination_device:
+                    descriptions.append(
+                        f"{source_interface} on {source_device} is connected to device {destination_device} [{mac_address}]"
+                    )
+                else:
+                    descriptions.append(
+                        f"{source_interface} on {source_device} is connected to device with MAC {mac_address}"
+                    )
             
             elif conn_type == "host_connection":
                 source_device = connection.get("source_device", "unknown")
