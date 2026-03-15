@@ -1,175 +1,173 @@
 # Mikrotik Network Mapper
 
-A tool for mapping network connections between Mikrotik devices and hosts. This tool scans networks for Mikrotik devices, collects configuration data via SSH, and builds a connection map showing how devices and hosts are interconnected.
+A tool for discovering MikroTik devices, collecting live RouterOS data,
+and generating a connection map plus a rooted topology tree.
 
 ## Features
 
-- **Network Scanning**: Automatically discovers Mikrotik devices on a network
-- **Data Collection**: Gathers interface, bridge, ARP, and DHCP information via SSH
-- **Connection Mapping**: Builds a map of device-to-device and device-to-host connections
-- **Encrypted Credentials**: Securely stores SSH credentials with master password protection
-- **JSON Output**: Exports connection data in structured JSON format
-- **Human-Readable Output**: Generates easy-to-understand connection descriptions
+- Discover MikroTik devices on a subnet
+- Collect live data via RouterOS API by default
+- Fall back to SSH collection when needed
+- Store encrypted device credentials behind a master password
+- Build `final_map.json` and `connections.txt`
+- Generate `topology.txt` as a rooted port tree
+- Append unresolved known-but-unplaced hosts after the topology tree
 
 ## Requirements
 
-- Python 3.6+
-- Paramiko library
-- Cryptography library
+- Python 3.8+
+- Dependencies from `requirements.txt`
 
 Install dependencies:
+
 ```bash
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
-## Usage
+## Default Behavior
 
-### Basic Network Mapping
+Live collection now defaults to:
 
-Scan a network range and map connections:
+- backend: RouterOS API
+- API port: `8728`
+- API SSL: disabled
+
+So this is the default refresh flow:
+
 ```bash
-python3 main.py 192.168.1.0/24 -u admin -p password
+python3 main.py --scan-file
 ```
 
-All output files will be stored in the `data/` directory:
-- `data/scan_results.json`: Discovered Mikrotik devices
-- `data/collected_data.json`: Raw device data
-- `data/final_map.json`: Structured JSON connection map
-- `data/connections.txt`: Human-readable connection descriptions
-- `data/credentials.encrypted`: Encrypted SSH credentials
+That command will:
 
-### Network Mapping with Custom SSH Port
+1. read `data/scan_results.json`
+2. recollect live data from those devices
+3. rebuild `data/final_map.json`
+4. rebuild `data/connections.txt`
+5. regenerate `data/topology.txt`
 
-Scan and map connections using a custom SSH port:
+## Common Workflows
+
+### Store default credentials
+
 ```bash
-python3 main.py --ssh-port 10021 192.168.1.0/24 -u admin -p password
+python3 main.py --store-default-credentials -u admin -p 'password'
 ```
 
-### Network Mapping with Verbose Output
+If `-u/-p` are omitted, the CLI will prompt.
 
-Scan with detailed output showing the scanning process:
-```bash
-python3 main.py -v 192.168.1.0/24 -u admin -p password
-```
+### Scan a subnet and build the map
 
-### Storing Default Credentials
-
-Store default credentials for all routers (will prompt for username/password):
-```bash
-python3 main.py --store-default-credentials
-```
-
-Or provide credentials directly:
-```bash
-python3 main.py --store-default-credentials -u admin -p password
-```
-
-### Storing Host-Specific Credentials
-
-Store credentials for a specific host (will prompt for username/password):
-```bash
-python3 main.py --store-credentials --hostname 192.168.1.1
-```
-
-Or provide credentials directly:
-```bash
-python3 main.py --store-credentials --hostname 192.168.1.1 -u admin -p password
-```
-
-### Using Stored Credentials
-
-Run mapping without specifying credentials (will use default or host-specific credentials):
 ```bash
 python3 main.py 192.168.1.0/24
 ```
 
-The tool will:
-1. Use host-specific credentials if stored for a particular router
-2. Fall back to default credentials if no host-specific credentials are found
-3. Prompt for credentials if neither default nor host-specific credentials are available
+This scans for MikroTik devices, collects data, and builds:
 
-### Using Stored Credentials
+- `data/scan_results.json`
+- `data/collected_data.json`
+- `data/final_map.json`
+- `data/connections.txt`
 
-Store credentials for later use:
+### Refresh known devices without rescanning the subnet
+
 ```bash
-python3 main.py --store-credentials --hostname 192.168.1.1 -u admin -p password
+python3 main.py --scan-file
 ```
 
-Then run mapping without specifying credentials (will prompt for master password):
+You can also point at a different scan file:
+
 ```bash
-python3 main.py 192.168.1.0/24
+python3 main.py --scan-file other_scan_results.json
 ```
 
-### Generate Network Topology
+### Generate topology from existing collected data
 
-Create network topology from collected data:
 ```bash
-python3 main.py --generate-topology --data-file data/collected_data.json
+python3 main.py --generate-topology
 ```
 
-This topology generation provides:
-- Categorized devices (routers, switches, access points)
-- Network connectivity analysis
-- Accurate physical interface names instead of bridge names
-- Hierarchical device naming (DNS > DHCP > Neighbor discovery)
-- Automatic end device identification
-- Detailed MAC-to-port mappings
-- Directory-style topology presentation
-- Better connection accuracy using neighbor discovery
-- Intelligent recommendations for network optimization
-- Output saved to `data/topology.txt`
+`--generate-topology` defaults to:
 
-Note: To fully utilize topology generation, fresh data collection is
-recommended as it requires additional data sources (`/ip neighbor`,
-`/ip dns static`, `/interface bridge host`).
+- input: `data/collected_data.json`
+- output: `data/topology.txt`
 
-## Running Tests
-
-The tool includes a comprehensive test suite that can be run with user-provided credentials:
+### Build only the map from existing collected data
 
 ```bash
-python3 tests/test_runner.py
+python3 main.py --data-file data/collected_data.json
 ```
 
-The test runner will prompt for:
-- Test device hostname/IP
-- SSH username and password
-- Master password for credential storage
+## Backend Selection
 
-If credentials are provided, integration tests will be run against actual Mikrotik devices.
-If no credentials are provided, unit tests will still run.
+### RouterOS API, default
 
-Individual test modules can also be run directly:
 ```bash
-python3 tests/test_scanner.py
-python3 tests/test_ssh.py
-python3 tests/test_data_collector.py
-python3 tests/test_mapping.py
-python3 tests/test_credential_manager.py
-python3 tests/test_main.py
+python3 main.py --scan-file --backend api --api-port 8728
+```
+
+Enable API TLS explicitly:
+
+```bash
+python3 main.py --scan-file --backend api --api-port 8729 --api-ssl
+```
+
+### SSH fallback
+
+```bash
+python3 main.py --scan-file --backend ssh --ssh-port 22
+```
+
+## Topology Output
+
+`data/topology.txt` is generated as a rooted tree:
+
+- root device first, usually the edge router
+- ports rendered under each managed device
+- downstream MikroTiks nested under the port they hang off
+- WAN interface chains rendered under the physical WAN port
+- shared segments shown explicitly when point-to-point inference is weak
+- unresolved known hosts listed after the tree
+
+PoE labels are shown on Ethernet ports when live PoE monitor data is
+available, for example:
+
+```text
+ether5-shadow [04:F4:1C:0F:DC:1C] [PoE: 3.1W]
 ```
 
 ## Output Files
 
-All files are stored in the `data/` directory:
-- `data/final_map.json`: Structured JSON connection map
-- `data/connections.txt`: Human-readable connection descriptions
-- `data/scan_results.json`: Discovered Mikrotik devices (when scanning)
-- `data/collected_data.json`: Raw device data (when collecting)
-- `data/credentials.encrypted`: Encrypted SSH credentials (when storing)
+All generated output lives under `data/`:
+
+- `scan_results.json`: discovered MikroTik devices
+- `collected_data.json`: raw collected device data
+- `final_map.json`: structured JSON connection map
+- `connections.txt`: readable connection summary
+- `topology.txt`: rooted topology tree
+- `credentials.encrypted`: encrypted stored credentials
 
 ## Security
 
-- SSH credentials are encrypted using AES with a master password
-- Each credential entry is encrypted separately
-- Master password is never stored on disk
-- All sensitive data is stored in encrypted format
+- Device credentials are encrypted locally
+- Access to stored credentials requires the master password
+- The master password is not stored on disk
+
+## Tests
+
+Run focused tests directly:
+
+```bash
+python3 tests/test_api.py
+python3 tests/test_data_collector.py
+python3 tests/test_main.py
+python3 tests/test_mapping.py
+python3 tests/test_topology_builder.py
+python3 tests/test_ssh.py
+```
 
 ## Modules
 
-- `lib/`: All core library modules (network scanning, data collection, mapping, credential management, SSH)
-- `data/`: All generated data files
-
-## License
-
-MIT License
+- `lib/`: scanner, collectors, backends, mapping, topology, credentials
+- `tests/`: unit and integration-style tests
+- `data/`: generated local output, not committed by default

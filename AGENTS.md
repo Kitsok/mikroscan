@@ -10,6 +10,14 @@
 - Use `AGENTS.md` as the authoritative repository instruction file.
 - Do not rely on `AGENT.md` for repository-specific instructions.
 - Wrap commit message bodies to a reasonable line length (target 72 chars).
+- Current live collection defaults:
+  - backend `api`
+  - API port `8728`
+  - API TLS disabled by default
+- `python3 main.py --scan-file` now refreshes collected data, rebuilds the
+  map outputs, and regenerates `data/topology.txt`.
+- `python3 main.py --generate-topology` defaults to
+  `data/collected_data.json`.
 
 ## Bug Fixes
 - ✅ **Fix SSH port routing (issue identified by user)**
