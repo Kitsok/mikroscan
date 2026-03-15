@@ -146,13 +146,6 @@ class MikrotikMapper:
             
             data = all_data
         else:
-            # Store credentials if provided
-            if username and (password or key_file):
-                # Set master password and store credentials
-                if self.credential_manager.set_master_password():
-                    for hostname in hostnames:
-                        self.credential_manager.store_credentials(hostname, username, password, key_file)
-            
             # Create data collector with provided credentials
             self.collector = DataCollector(
                 username=username,
