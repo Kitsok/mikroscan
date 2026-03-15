@@ -100,35 +100,28 @@ Then run mapping without specifying credentials (will prompt for master password
 python3 main.py 192.168.1.0/24
 ```
 
-### Generate Network Topology Diagram
+### Generate Network Topology
 
-Create a network topology diagram from collected data:
+Create network topology from collected data:
 ```bash
 python3 main.py --generate-topology --data-file data/collected_data.json
 ```
 
-This will generate a topology diagram showing:
+This topology generation provides:
 - Categorized devices (routers, switches, access points)
 - Network connectivity analysis
-- Intelligent recommendations for network optimization
-- Output saved to `data/topology.txt`
-
-### Generate Refactored Network Topology (Enhanced)
-
-Create an enhanced network topology using the refactored approach with improved accuracy:
-```bash
-python3 main.py --generate-refactored-topology --data-file data/collected_data.json
-```
-
-The refactored approach provides:
 - Accurate physical interface names instead of bridge names
 - Hierarchical device naming (DNS > DHCP > Neighbor discovery)
 - Automatic end device identification
 - Detailed MAC-to-port mappings
 - Directory-style topology presentation
 - Better connection accuracy using neighbor discovery
+- Intelligent recommendations for network optimization
+- Output saved to `data/topology.txt`
 
-Note: To fully utilize the refactored approach, fresh data collection is recommended as it requires additional data sources (`/ip neighbor`, `/ip dns static`, `/interface bridge host`).
+Note: To fully utilize topology generation, fresh data collection is
+recommended as it requires additional data sources (`/ip neighbor`,
+`/ip dns static`, `/interface bridge host`).
 
 ## Running Tests
 

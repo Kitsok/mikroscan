@@ -74,7 +74,7 @@
 
 - ✅ Add network topology diagram generation
   - Added `--generate-topology` command line option
-  - Created generate_topology_diagram() method in MikrotikMapper
+  - Created topology generation support in `MikrotikMapper`
   - Analyzes collected data to produce network device categorization
   - Provides connectivity analysis based on ARP data
   - Generates intelligent recommendations for network optimization
@@ -245,7 +245,7 @@ Implemented a completely refactored network topology building approach based on 
 - Extended `MikrotikSSHClient` with new methods for all required Mikrotik commands
 - Updated `DataCollector` to gather the new data types
 - Created new `TopologyBuilder` class implementing the refactored approach
-- Added `--generate-refactored-topology` command line option to `main.py`
+- Unified topology generation under `--generate-topology` in `main.py`
 - Produces enhanced topology output with accurate physical interface names and proper device classification
 
 ### Key Improvements
