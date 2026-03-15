@@ -11,7 +11,7 @@ import json
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scanner.network_scanner import NetworkScanner
+from lib.network_scanner import NetworkScanner
 
 def test_network_scanner_initialization():
     """Test NetworkScanner initialization."""

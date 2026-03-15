@@ -16,29 +16,14 @@ from main import MikrotikMapper
 class TestFeatures(unittest.TestCase):
     """Test features including SSH port routing and verbose mode."""
     
-    @patch('data.data_collector.DataCollector')
-    @patch('scanner.network_scanner.NetworkScanner.scan_for_mikrotik_devices')
-    def test_run_full_mapping_passes_port(self, mock_scan, mock_collector_class):
+    @patch('main.MikrotikMapper.build_map', return_value={})
+    @patch('main.MikrotikMapper.collect_data', return_value={})
+    @patch('main.MikrotikMapper.scan_network')
+    def test_run_full_mapping_passes_port(self, mock_scan_network, mock_collect_data, mock_build_map):
         """Test that run_full_mapping passes port parameter correctly."""
-        # Mock scan results
-        mock_scan.return_value = [
+        mock_scan_network.return_value = [
             {"ip": "192.168.1.1", "hostname": "router1", "type": "mikrotik"}
         ]
-        
-        # Mock collector instance
-        mock_collector_instance = MagicMock()
-        mock_collector_instance.collect_from_devices.return_value = {
-            "192.168.1.1": {
-                "hostname": "192.168.1.1",
-                "connected": True,
-                "device_info": {"identity": "router1"},
-                "interfaces": [],
-                "bridge_ports": [],
-                "arp_table": [],
-                "dhcp_leases": []
-            }
-        }
-        mock_collector_class.return_value = mock_collector_instance
         
         # Create mapper
         mapper = MikrotikMapper()
@@ -52,28 +37,21 @@ class TestFeatures(unittest.TestCase):
             timeout=5
         )
         
-        # Verify that DataCollector was instantiated with the correct parameters
-        self.assertTrue(mock_collector_class.called)
-        
-        # Check the call arguments to verify port was passed to collect_from_devices
-        self.assertTrue(mock_collector_instance.collect_from_devices.called)
-        
-        # Check the call arguments to verify port was passed
-        call_args = mock_collector_instance.collect_from_devices.call_args
+        self.assertTrue(mock_collect_data.called)
+
+        call_args = mock_collect_data.call_args
         if call_args:
             args, kwargs = call_args
-            # The port should be the third positional argument (after hostnames and before timeout)
-            # Or it could be passed as a keyword argument
-            port_in_args = len(args) > 2 and args[2] == 10021
+            port_in_args = len(args) > 5 and args[5] == 10021
             port_in_kwargs = 'port' in kwargs and kwargs['port'] == 10021
             
             self.assertTrue(port_in_args or port_in_kwargs, 
                           f"Port 10021 not found in call args={args} kwargs={kwargs}")
-            print(f"✓ Port routing test passed - port correctly passed to collector")
+            print("✓ Port routing test passed - port correctly passed to collect_data")
         else:
             print("✓ Port routing test executed")
     
-    @patch('scanner.network_scanner.NetworkScanner')
+    @patch('main.NetworkScanner')
     def test_verbose_mode_scanner_creation(self, mock_scanner_class):
         """Test that verbose mode is passed to NetworkScanner."""
         # Mock scanner instance

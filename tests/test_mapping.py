@@ -11,7 +11,7 @@ import json
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mapping.connection_mapper import ConnectionMapper
+from lib.connection_mapper import ConnectionMapper
 
 def test_connection_mapper_initialization():
     """Test ConnectionMapper initialization."""

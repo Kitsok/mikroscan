@@ -12,10 +12,10 @@ import tempfile
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scanner.network_scanner import NetworkScanner
-from data.data_collector import DataCollector
-from mapping.connection_mapper import ConnectionMapper
-from credential_manager import CredentialManager
+from lib.network_scanner import NetworkScanner
+from lib.data_collector import DataCollector
+from lib.connection_mapper import ConnectionMapper
+from lib.credential_manager import CredentialManager
 
 def test_credential_storage_integration():
     """Test credential storage and retrieval integration."""
