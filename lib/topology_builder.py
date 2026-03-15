@@ -5,6 +5,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 from typing import Dict, List, Set, Tuple, Any
 from collections import defaultdict
 
@@ -111,6 +112,154 @@ class TopologyBuilder:
                     device_mac_sets[device_name].add(mac)
 
         return device_mac_sets
+
+    def _find_public_ip_entries(self, device_data: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Return public IPv4 addresses with their owning interface names."""
+        public_entries = []
+
+        for ip_entry in device_data.get("ip_addresses", []):
+            address = ip_entry.get("address", "")
+            if not address:
+                continue
+
+            ip_part = address.split("/")[0]
+            if not self._is_public_ip(ip_part):
+                continue
+
+            interface_name = (
+                ip_entry.get("actual_interface")
+                or ip_entry.get("interface")
+                or ""
+            )
+            public_entries.append({
+                "address": address,
+                "interface": interface_name,
+            })
+
+        return public_entries
+
+    def _score_interface_parent_candidate(
+        self,
+        child_interface: Dict[str, Any],
+        candidate_interface: Dict[str, Any],
+    ) -> int:
+        """Rank likely lower-layer parent interfaces for WAN chain inference."""
+        child_name = self._clean_name(child_interface.get("name", "")).lower()
+        candidate_name = self._clean_name(candidate_interface.get("name", "")).lower()
+        candidate_type = candidate_interface.get("type", "").lower()
+        candidate_default = self._clean_name(
+            candidate_interface.get("default_name", "")
+        ).lower()
+        score = 0
+
+        if "wan" in child_name and "wan" in candidate_name:
+            score += 10
+        if candidate_type == "vlan":
+            score += 8
+        elif candidate_type == "ether":
+            score += 6
+
+        child_mac = (child_interface.get("mac_address") or "").upper()
+        candidate_mac = (candidate_interface.get("mac_address") or "").upper()
+        if child_mac and candidate_mac and child_mac == candidate_mac:
+            score += 20
+
+        if candidate_default and candidate_default in child_name:
+            score += 6
+        if candidate_name and candidate_name in child_name:
+            score += 4
+
+        shared_tokens = (
+            set(token for token in re.split(r"[^a-z0-9]+", child_name) if token)
+            & set(token for token in re.split(r"[^a-z0-9]+", candidate_name) if token)
+        ) - {"pppoe", "out", "vlan"}
+        score += len(shared_tokens) * 2
+
+        return score
+
+    def _find_interface_parent(
+        self,
+        interface_name: str,
+        interfaces_by_name: Dict[str, Dict[str, Any]],
+    ) -> str:
+        """Infer a lower-layer parent interface for the given interface."""
+        current_interface = interfaces_by_name.get(interface_name)
+        if not current_interface:
+            return ""
+
+        for key in (
+            "interface",
+            "master_interface",
+            "parent_interface",
+            "underlying_interface",
+            "running_on",
+        ):
+            parent_name = self._clean_name(current_interface.get(key, ""))
+            if parent_name and parent_name in interfaces_by_name:
+                return parent_name
+
+        candidate_scores = []
+        for candidate_name, candidate_interface in interfaces_by_name.items():
+            if candidate_name == interface_name:
+                continue
+
+            score = self._score_interface_parent_candidate(
+                current_interface,
+                candidate_interface,
+            )
+            if score > 0:
+                candidate_scores.append((score, candidate_name))
+
+        if not candidate_scores:
+            return ""
+
+        candidate_scores.sort(reverse=True)
+        best_score, best_name = candidate_scores[0]
+        if best_score < 8:
+            return ""
+        return best_name
+
+    def _build_wan_chain(
+        self,
+        device_data: Dict[str, Any],
+        public_entry: Dict[str, str],
+    ) -> List[str]:
+        """Build physical-to-logical WAN interface chain for a public IP."""
+        interfaces_by_name = {
+            self._clean_name(interface.get("name", "")): interface
+            for interface in device_data.get("interfaces", [])
+            if interface.get("name")
+        }
+
+        chain = []
+        current_name = self._clean_name(public_entry.get("interface", ""))
+        seen_names = set()
+
+        while current_name and current_name not in seen_names:
+            chain.append(current_name)
+            seen_names.add(current_name)
+            current_name = self._find_interface_parent(current_name, interfaces_by_name)
+
+        chain.reverse()
+        return chain
+
+    def _format_root_wan_summary(self, device_data: Dict[str, Any]) -> str:
+        """Format WAN summary including physical-to-logical interface chain."""
+        public_entries = self._find_public_ip_entries(device_data)
+        if not public_entries:
+            return ""
+
+        formatted_entries = []
+        for public_entry in public_entries[:3]:
+            chain = self._build_wan_chain(device_data, public_entry)
+            if chain:
+                formatted_entries.append(
+                    f"{' -> '.join(chain)} ({public_entry['address']})"
+                )
+            else:
+                formatted_entries.append(public_entry["address"])
+
+        return " | ".join(formatted_entries)
         
     def _is_public_ip(self, ip):
         """
@@ -514,6 +663,11 @@ class TopologyBuilder:
         device_port_endpoints = self._build_device_port_endpoints()
         managed_identity_ip_map = self._build_known_identity_ip_map()
         edge_routers = self._identify_edge_routers()
+        connected_device_data = {
+            self._clean_name(device_data.get("device_info", {}).get("identity", hostname)): device_data
+            for hostname, device_data in self.devices_data.items()
+            if device_data.get("connected", False)
+        }
         connected_devices = sorted(
             self._clean_name(device_data.get("device_info", {}).get("identity", hostname))
             for hostname, device_data in self.devices_data.items()
@@ -532,15 +686,19 @@ class TopologyBuilder:
 
         globally_rendered = set()
 
-        for root_index, root_device in enumerate(root_devices):
+        for root_device in root_devices:
             if root_device in globally_rendered:
                 continue
 
             root_ip = managed_identity_ip_map.get(root_device, "Unknown IP")
             header = f"{root_device} ({root_ip})"
-            public_ips = edge_routers.get(root_device, [])
-            if public_ips:
-                header += f" WAN: {', '.join(public_ips[:3])}"
+            wan_summary = self._format_root_wan_summary(
+                connected_device_data.get(root_device, {})
+            )
+            if wan_summary:
+                header += f" WAN: {wan_summary}"
+            elif edge_routers.get(root_device):
+                header += f" WAN: {', '.join(edge_routers[root_device][:3])}"
 
             lines.append(header)
             visited_devices = {root_device}

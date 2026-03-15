@@ -22,6 +22,8 @@ def test_generate_topology_output_builds_rooted_tree():
             "interfaces": [
                 {"name": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
                 {"name": "ether2", "mac_address": "AA:AA:AA:AA:AA:02"},
+                {"name": "WAN-VLAN6", "type": "vlan", "mac_address": "AA:AA:AA:AA:AA:01"},
+                {"name": "WAN-pppoe", "type": "pppoe-out"},
             ],
             "bridge_hosts": [
                 {"interface": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
@@ -42,7 +44,7 @@ def test_generate_topology_output_builds_rooted_tree():
             ],
             "dns_static": [],
             "arp_table": [],
-            "ip_addresses": [{"address": "8.8.8.8/32"}],
+            "ip_addresses": [{"address": "8.8.8.8/32", "interface": "WAN-pppoe"}],
             "neighbors": [],
         },
         "192.168.0.2": {
@@ -88,7 +90,7 @@ def test_generate_topology_output_builds_rooted_tree():
             os.unlink(output_file)
 
     assert "NETWORK TOPOLOGY" in output
-    assert "Root (1.1.1.1) WAN: 8.8.8.8/32" in output
+    assert "Root (1.1.1.1) WAN: ether1 -> WAN-VLAN6 -> WAN-pppoe (8.8.8.8/32)" in output
     assert "├─ ether1" in output
     assert "Branch (192.168.0.2) [BB:BB:BB:BB:BB:01]" in output
     assert "│  └─ wifi1" in output or "   └─ wifi1" in output
