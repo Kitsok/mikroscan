@@ -291,7 +291,7 @@ Examples:
   python3 main.py --data-file data/collected_data.json
   
   # Generate network topology
-  python3 main.py --generate-topology --data-file data/collected_data.json
+  python3 main.py --generate-topology
   
   # Store default credentials (will prompt for username/password)
   python3 main.py --store-default-credentials
@@ -316,7 +316,8 @@ Examples:
     
     parser.add_argument(
         "--data-file",
-        help="Use existing collected data file"
+        default="data/collected_data.json",
+        help="Use existing collected data file (default: data/collected_data.json)"
     )
     
     parser.add_argument(
@@ -456,10 +457,6 @@ Examples:
     
     # Handle topology generation (doesn't need authentication)
     if args.generate_topology:
-        # Generate network topology
-        if not args.data_file:
-            parser.error("--generate-topology requires --data-file")
-        
         mapper = MikrotikMapper()
         logger.info("Generating network topology")
         mapper.generate_topology(
@@ -514,9 +511,6 @@ Examples:
                 
         elif args.generate_topology:
             # Generate network topology
-            if not args.data_file:
-                parser.error("--generate-topology requires --data-file")
-            
             logger.info("Generating network topology")
             mapper.generate_topology(
                 data_file=args.data_file,
