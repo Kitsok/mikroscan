@@ -57,12 +57,31 @@ class TopologyBuilder:
                 mac = (interface.get("mac_address") or interface.get("link_layer_address") or "").upper()
                 if not mac:
                     continue
+                if mac == "00:00:00:00:00:00":
+                    continue
                 if device_name:
                     device_name_map[mac] = device_name
                 if device_ip:
                     device_ip_map[mac] = device_ip
 
         return device_name_map, device_ip_map
+
+    def _build_known_identity_ip_map(self) -> Dict[str, str]:
+        """Build a mapping of managed device identity to management IP."""
+        identity_ip_map = {}
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            identity = self._clean_name(
+                device_data.get("device_info", {}).get("identity", hostname)
+            )
+            management_ip = device_data.get("hostname", hostname)
+            if identity and management_ip:
+                identity_ip_map[identity] = management_ip
+
+        return identity_ip_map
         
     def _is_public_ip(self, ip):
         """
@@ -425,10 +444,13 @@ class TopologyBuilder:
         # Device listing with names
         lines.append("DEVICE LISTING")
         lines.append("-" * 14)
+        managed_identity_ip_map = self._build_known_identity_ip_map()
         grouped_devices = defaultdict(list)
         for mac, name in self.mac_name_map.items():
+            if mac == "00:00:00:00:00:00":
+                continue
             clean_name = self._clean_name(name)
-            ip = self.mac_ip_map.get(mac, "Unknown IP")
+            ip = self.mac_ip_map.get(mac, managed_identity_ip_map.get(clean_name, "Unknown IP"))
             grouped_devices[(clean_name, ip)].append(mac)
 
         for (name, ip), macs in sorted(grouped_devices.items(), key=lambda item: (item[0][0].lower(), item[0][1], item[1][0])):
