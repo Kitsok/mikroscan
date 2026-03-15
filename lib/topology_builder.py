@@ -26,6 +26,43 @@ class TopologyBuilder:
         self.ip_name_map = {}
         self.mac_port_map = {}
         self.topology_graph = defaultdict(list)
+
+    def _clean_name(self, name: str) -> str:
+        """Normalize display names parsed from RouterOS output."""
+        if not name:
+            return ""
+        return name.strip().strip('"').strip()
+
+    def _build_known_device_maps(self):
+        """
+        Build MAC-to-device and MAC-to-IP maps from the collected MikroTik
+        devices themselves.
+
+        Returns:
+            tuple[dict, dict]: MAC-to-name and MAC-to-IP mappings
+        """
+        device_name_map = {}
+        device_ip_map = {}
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._clean_name(
+                device_data.get("device_info", {}).get("identity", hostname)
+            )
+            device_ip = device_data.get("hostname", hostname)
+
+            for interface in device_data.get("interfaces", []):
+                mac = (interface.get("mac_address") or interface.get("link_layer_address") or "").upper()
+                if not mac:
+                    continue
+                if device_name:
+                    device_name_map[mac] = device_name
+                if device_ip:
+                    device_ip_map[mac] = device_ip
+
+        return device_name_map, device_ip_map
         
     def _is_public_ip(self, ip):
         """
@@ -111,6 +148,7 @@ class TopologyBuilder:
         logger.info("Building MAC-to-name mapping...")
         
         # Temporary maps for each source
+        device_map, _ = self._build_known_device_maps()
         dns_map = {}
         dhcp_map = {}
         neighbor_map = {}
@@ -137,14 +175,14 @@ class TopologyBuilder:
             for dhcp_entry in device_data.get("dhcp_leases", []):
                 mac = dhcp_entry.get("mac_address", "").upper()
                 ip = dhcp_entry.get("active_address") or dhcp_entry.get("address", "")
-                name = dns_ip_map.get(ip, "")
+                name = self._clean_name(dns_ip_map.get(ip, ""))
                 if mac and name:
                     dns_map[mac] = name
 
             for arp_entry in device_data.get("arp_table", []):
                 mac = arp_entry.get("mac_address", "").upper()
                 ip = arp_entry.get("address", "")
-                name = dns_ip_map.get(ip, "")
+                name = self._clean_name(dns_ip_map.get(ip, ""))
                 if mac and name and mac not in dns_map:
                     dns_map[mac] = name
         
@@ -155,7 +193,7 @@ class TopologyBuilder:
                 
             for dhcp_entry in device_data.get("dhcp_leases", []):
                 mac = dhcp_entry.get("mac_address", "").upper()
-                host_name = dhcp_entry.get("host_name", "")
+                host_name = self._clean_name(dhcp_entry.get("host_name", ""))
                 if mac and host_name:
                     dhcp_map[mac] = host_name
         
@@ -166,15 +204,17 @@ class TopologyBuilder:
                 
             for neighbor in device_data.get("neighbors", []):
                 mac = neighbor.get("mac_address", "").upper()
-                identity = neighbor.get("identity", "")
+                identity = self._clean_name(neighbor.get("identity", ""))
                 if mac and identity:
                     neighbor_map[mac] = identity
         
         # Build final map with priority
-        all_macs = set(dns_map.keys()) | set(dhcp_map.keys()) | set(neighbor_map.keys())
+        all_macs = set(device_map.keys()) | set(dns_map.keys()) | set(dhcp_map.keys()) | set(neighbor_map.keys())
         
         for mac in all_macs:
-            if mac in dns_map:
+            if mac in device_map:
+                self.mac_name_map[mac] = device_map[mac]
+            elif mac in dns_map:
                 self.mac_name_map[mac] = dns_map[mac]
             elif mac in dhcp_map:
                 self.mac_name_map[mac] = dhcp_map[mac]
@@ -186,6 +226,9 @@ class TopologyBuilder:
     def build_mac_ip_map(self):
         """Build MAC-to-IP mapping from DHCP leases."""
         logger.info("Building MAC-to-IP mapping...")
+
+        _, device_ip_map = self._build_known_device_maps()
+        self.mac_ip_map.update(device_ip_map)
         
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
@@ -382,9 +425,18 @@ class TopologyBuilder:
         # Device listing with names
         lines.append("DEVICE LISTING")
         lines.append("-" * 14)
+        grouped_devices = defaultdict(list)
         for mac, name in self.mac_name_map.items():
+            clean_name = self._clean_name(name)
             ip = self.mac_ip_map.get(mac, "Unknown IP")
-            lines.append(f"  • {name} [{mac}] ({ip})")
+            grouped_devices[(clean_name, ip)].append(mac)
+
+        for (name, ip), macs in sorted(grouped_devices.items(), key=lambda item: (item[0][0].lower(), item[0][1], item[1][0])):
+            if len(macs) == 1:
+                lines.append(f"  • {name} [{macs[0]}] ({ip})")
+            else:
+                lines.append(f"  • {name} ({ip})")
+                lines.append(f"    MACs: {', '.join(sorted(macs)[:5])}")
         lines.append("")
         
         # Show complete port mapping for each device
