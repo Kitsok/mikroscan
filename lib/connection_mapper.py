@@ -22,6 +22,13 @@ class ConnectionMapper:
         self.connection_map = {}
         self.device_mac_map = {}
         self.host_interface_map = {}
+        self.managed_device_names = set()
+
+    def _clean_name(self, name: str) -> str:
+        """Normalize device and host names for comparisons."""
+        if not name:
+            return ""
+        return name.strip().strip('"').strip()
     
     def load_data(self, filename: str) -> Dict:
         """
@@ -68,6 +75,11 @@ class ConnectionMapper:
         }
         self.device_mac_map = self._build_device_mac_map()
         self.host_interface_map = self._build_host_interface_map()
+        self.managed_device_names = {
+            self._clean_name(device_data.get("device_info", {}).get("identity", hostname))
+            for hostname, device_data in self.devices_data.items()
+            if device_data.get("connected", False)
+        }
         
         # Process each device
         for hostname, device_data in self.devices_data.items():
@@ -218,10 +230,12 @@ class ConnectionMapper:
         # Process ARP entries to identify hosts
         for arp_entry in all_arp_entries:
             ip_address = arp_entry.get("address")
-            mac_address = arp_entry.get("mac_address")
+            mac_address = (arp_entry.get("mac_address") or "").upper()
             source_device = arp_entry.get("_source_device")
             
             if ip_address and mac_address:
+                if mac_address in self.device_mac_map:
+                    continue
                 if mac_address not in self.connection_map["hosts"]:
                     self.connection_map["hosts"][mac_address] = {
                         "mac_address": mac_address,
@@ -238,9 +252,16 @@ class ConnectionMapper:
         
         # Process DHCP leases to enhance host information
         for lease in all_dhcp_leases:
-            mac_address = lease.get("mac_address")
+            mac_address = (lease.get("mac_address") or "").upper()
             active_address = lease.get("active_address")
-            host_name = lease.get("host_name", "")
+            host_name = self._clean_name(lease.get("host_name", ""))
+
+            if not mac_address:
+                continue
+
+            if mac_address in self.device_mac_map or host_name in self.managed_device_names:
+                self.connection_map["hosts"].pop(mac_address, None)
+                continue
             
             if mac_address and mac_address in self.connection_map["hosts"]:
                 host = self.connection_map["hosts"][mac_address]
