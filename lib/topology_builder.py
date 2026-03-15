@@ -1034,10 +1034,19 @@ class TopologyBuilder:
                 device_port_endpoints.get(device_name, {}).get(port, []),
             )
             endpoints = self._reduce_port_endpoints(endpoints, device_port_endpoints)
+            device_count = sum(1 for endpoint in endpoints if endpoint["type"] == "device")
+            host_count = sum(1 for endpoint in endpoints if endpoint["type"] == "host")
+            shared_segment = device_count > 1 or (device_count >= 1 and host_count >= 1)
+
+            if shared_segment:
+                lines.append(f"{port_prefix}└─ [shared segment]")
+                endpoint_prefix_base = f"{port_prefix}   "
+            else:
+                endpoint_prefix_base = port_prefix
 
             for endpoint_index, endpoint in enumerate(endpoints):
                 endpoint_connector = "└─" if endpoint_index == len(endpoints) - 1 else "├─"
-                endpoint_prefix = port_prefix + (
+                endpoint_prefix = endpoint_prefix_base + (
                     "   " if endpoint_index == len(endpoints) - 1 else "│  "
                 )
 
@@ -1046,7 +1055,9 @@ class TopologyBuilder:
                     if not chain_labels:
                         continue
 
-                    lines.append(f"{port_prefix}{endpoint_connector} {chain_labels[0]}")
+                    lines.append(
+                        f"{endpoint_prefix_base}{endpoint_connector} {chain_labels[0]}"
+                    )
                     chain_prefix = endpoint_prefix
                     for chain_label in chain_labels[1:]:
                         lines.append(f"{chain_prefix}└─ {chain_label}")
@@ -1057,13 +1068,13 @@ class TopologyBuilder:
                     child_name = endpoint["name"]
                     if child_name in visited_devices:
                         lines.append(
-                            f"{port_prefix}{endpoint_connector} "
+                            f"{endpoint_prefix_base}{endpoint_connector} "
                             f"{self._format_endpoint_label(endpoint)} [already shown]"
                         )
                         continue
 
                     lines.append(
-                        f"{port_prefix}{endpoint_connector} "
+                        f"{endpoint_prefix_base}{endpoint_connector} "
                         f"{self._format_endpoint_label(endpoint)}"
                     )
                     visited_devices.add(child_name)
@@ -1089,7 +1100,7 @@ class TopologyBuilder:
 
                 rendered_host_macs.add(endpoint["mac"])
                 lines.append(
-                    f"{port_prefix}{endpoint_connector} "
+                    f"{endpoint_prefix_base}{endpoint_connector} "
                     f"{self._format_endpoint_label(endpoint)}"
                 )
 

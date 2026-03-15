@@ -190,6 +190,232 @@ def test_generate_topology_output_hides_shared_segment_hosts_behind_single_child
     print("✓ shared-segment reduction test passed")
 
 
+def test_generate_topology_output_marks_multi_device_ports_as_shared_segments():
+    """Render a shared-segment node when one port still has multiple peer MikroTiks."""
+    builder = TopologyBuilder()
+    builder.devices_data = {
+        "1.1.1.1": {
+            "hostname": "1.1.1.1",
+            "connected": True,
+            "device_info": {"identity": "Root"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+                {"interface": "ether1", "mac_address": "CC:CC:CC:CC:CC:01"},
+                {"interface": "ether1", "mac_address": "DD:DD:DD:DD:DD:01"},
+            ],
+            "dhcp_leases": [
+                {
+                    "mac_address": "DD:DD:DD:DD:DD:01",
+                    "active_address": "192.168.0.30",
+                    "host_name": "segment-host",
+                }
+            ],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "1.1.1.1/24"}],
+            "neighbors": [],
+        },
+        "10.0.0.2": {
+            "hostname": "10.0.0.2",
+            "connected": True,
+            "device_info": {"identity": "BranchA"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+            ],
+            "dhcp_leases": [],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "10.0.0.2/24"}],
+            "neighbors": [],
+        },
+        "10.0.0.3": {
+            "hostname": "10.0.0.3",
+            "connected": True,
+            "device_info": {"identity": "BranchB"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "CC:CC:CC:CC:CC:01"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+            ],
+            "dhcp_leases": [],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "10.0.0.3/24"}],
+            "neighbors": [],
+        },
+    }
+
+    builder.build_mac_name_map()
+    builder.build_mac_ip_map()
+    builder.build_ip_name_map()
+    builder.build_mac_port_map()
+
+    with tempfile.NamedTemporaryFile(mode="r", delete=False) as handle:
+        output_file = handle.name
+
+    try:
+        builder.generate_topology_output(output_file)
+        with open(output_file, "r") as handle:
+            output = handle.read()
+    finally:
+        if os.path.exists(output_file):
+            os.unlink(output_file)
+
+    assert "└─ [shared segment]" in output
+    assert "├─ <ether1> BranchA (10.0.0.2) [BB:BB:BB:BB:BB:01]" in output
+    assert "├─ <ether1> BranchB (10.0.0.3) [CC:CC:CC:CC:CC:01]" in output
+    assert "└─ segment-host (192.168.0.30) [DD:DD:DD:DD:DD:01]" in output
+    print("✓ shared segment rendering test passed")
+
+
+def test_generate_topology_output_marks_device_plus_hosts_as_shared_segment():
+    """Render a shared-segment node for one MikroTik plus multiple hosts."""
+    builder = TopologyBuilder()
+    builder.devices_data = {
+        "1.1.1.1": {
+            "hostname": "1.1.1.1",
+            "connected": True,
+            "device_info": {"identity": "Root"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+                {"interface": "ether1", "mac_address": "DD:DD:DD:DD:DD:01"},
+                {"interface": "ether1", "mac_address": "EE:EE:EE:EE:EE:01"},
+            ],
+            "dhcp_leases": [
+                {
+                    "mac_address": "DD:DD:DD:DD:DD:01",
+                    "active_address": "192.168.0.30",
+                    "host_name": "host-a",
+                },
+                {
+                    "mac_address": "EE:EE:EE:EE:EE:01",
+                    "active_address": "192.168.0.31",
+                    "host_name": "host-b",
+                },
+            ],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "1.1.1.1/24"}],
+            "neighbors": [],
+        },
+        "10.0.0.2": {
+            "hostname": "10.0.0.2",
+            "connected": True,
+            "device_info": {"identity": "Branch"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+            ],
+            "dhcp_leases": [],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "10.0.0.2/24"}],
+            "neighbors": [],
+        },
+    }
+
+    builder.build_mac_name_map()
+    builder.build_mac_ip_map()
+    builder.build_ip_name_map()
+    builder.build_mac_port_map()
+
+    with tempfile.NamedTemporaryFile(mode="r", delete=False) as handle:
+        output_file = handle.name
+
+    try:
+        builder.generate_topology_output(output_file)
+        with open(output_file, "r") as handle:
+            output = handle.read()
+    finally:
+        if os.path.exists(output_file):
+            os.unlink(output_file)
+
+    assert "└─ [shared segment]" in output
+    assert "├─ <ether1> Branch (10.0.0.2) [BB:BB:BB:BB:BB:01]" in output
+    assert "├─ host-a (192.168.0.30) [DD:DD:DD:DD:DD:01]" in output
+    assert "└─ host-b (192.168.0.31) [EE:EE:EE:EE:EE:01]" in output
+    print("✓ device-plus-hosts shared segment test passed")
+
+
+def test_generate_topology_output_marks_device_plus_single_host_as_shared_segment():
+    """Render a shared-segment node for one MikroTik plus one direct host."""
+    builder = TopologyBuilder()
+    builder.devices_data = {
+        "1.1.1.1": {
+            "hostname": "1.1.1.1",
+            "connected": True,
+            "device_info": {"identity": "Root"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+                {"interface": "ether1", "mac_address": "DD:DD:DD:DD:DD:01"},
+            ],
+            "dhcp_leases": [
+                {
+                    "mac_address": "DD:DD:DD:DD:DD:01",
+                    "active_address": "192.168.0.30",
+                    "host_name": "host-a",
+                },
+            ],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "1.1.1.1/24"}],
+            "neighbors": [],
+        },
+        "10.0.0.2": {
+            "hostname": "10.0.0.2",
+            "connected": True,
+            "device_info": {"identity": "Branch"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+            ],
+            "dhcp_leases": [],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "10.0.0.2/24"}],
+            "neighbors": [],
+        },
+    }
+
+    builder.build_mac_name_map()
+    builder.build_mac_ip_map()
+    builder.build_ip_name_map()
+    builder.build_mac_port_map()
+
+    with tempfile.NamedTemporaryFile(mode="r", delete=False) as handle:
+        output_file = handle.name
+
+    try:
+        builder.generate_topology_output(output_file)
+        with open(output_file, "r") as handle:
+            output = handle.read()
+    finally:
+        if os.path.exists(output_file):
+            os.unlink(output_file)
+
+    assert "└─ [shared segment]" in output
+    assert "├─ <ether1> Branch (10.0.0.2) [BB:BB:BB:BB:BB:01]" in output
+    assert "└─ host-a (192.168.0.30) [DD:DD:DD:DD:DD:01]" in output
+    print("✓ device-plus-single-host shared segment test passed")
+
+
 def main():
     """Run topology builder tests."""
     print("Running Topology Builder Tests...")
@@ -197,6 +423,9 @@ def main():
     try:
         test_generate_topology_output_builds_rooted_tree()
         test_generate_topology_output_hides_shared_segment_hosts_behind_single_child()
+        test_generate_topology_output_marks_multi_device_ports_as_shared_segments()
+        test_generate_topology_output_marks_device_plus_hosts_as_shared_segment()
+        test_generate_topology_output_marks_device_plus_single_host_as_shared_segment()
         print("\nAll Topology Builder tests passed! ✓")
         return 0
     except Exception as exc:
