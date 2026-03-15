@@ -146,11 +146,8 @@ All files are stored in the `data/` directory:
 
 ## Modules
 
-- `scanner/`: Network scanning functionality
-- `ssh/`: SSH connection and data collection
-- `data/`: Data coordination and storage
-- `mapping/`: Connection mapping logic
-- `credential_manager.py`: Encrypted credential storage
+- `lib/`: All core library modules (network scanning, data collection, mapping, credential management, SSH)
+- `data/`: All generated data files
 
 ## License
 

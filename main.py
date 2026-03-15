@@ -12,10 +12,10 @@ import os
 import sys
 from typing import List
 
-from scanner.network_scanner import NetworkScanner
-from data_collector import DataCollector
-from mapping.connection_mapper import ConnectionMapper
-from credential_manager import CredentialManager
+from lib.network_scanner import NetworkScanner
+from lib.data_collector import DataCollector
+from lib.connection_mapper import ConnectionMapper
+from lib.credential_manager import CredentialManager
 
 # Set up logging
 logger = logging.getLogger(__name__)
