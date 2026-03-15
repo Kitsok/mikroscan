@@ -1,5 +1,8 @@
 # Agent Development Log
 
+## Important Notice
+⚠️ **Repository push operations are prohibited. Commits only. Never push to repository.
+
 ## Initial Setup
 Created AGENT.md file for tracking agent development progress.
 
