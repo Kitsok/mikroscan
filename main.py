@@ -162,8 +162,8 @@ class MikrotikMapper:
         logger.info("Data collection complete")
         return data
     
-    def build_map(self, data_file: str, output_file: str = "data/connection_map.json",
-                  readable_file: str = "connections.txt") -> dict:
+    def build_map(self, data_file: str, output_file: str = "data/final_map.json",
+                  readable_file: str = "data/connections.txt") -> dict:
         """
         Build connection map from collected data.
         
@@ -742,14 +742,14 @@ Examples:
     # Output options
     parser.add_argument(
         "-o", "--output",
-        default="final_map.json",
-        help="Output file for connection map (default: final_map.json)"
+        default="data/final_map.json",
+        help="Output file for connection map (default: data/final_map.json)"
     )
     
     parser.add_argument(
         "--readable-output",
-        default="connections.txt",
-        help="File for human-readable connections (default: connections.txt)"
+        default="data/connections.txt",
+        help="File for human-readable connections (default: data/connections.txt)"
     )
     
     args = parser.parse_args()
