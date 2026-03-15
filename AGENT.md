@@ -1,7 +1,12 @@
 # Agent Development Log
 
 ## Important Notice
-⚠️ **Repository push operations are prohibited. Commits only. Never push to repository.
+⚠️ **ABSOLUTE CONSTRAINTS:**
+1. NO repository pushes allowed
+2. NO commits without explicit permission - ALWAYS ASK FIRST
+3. Never push to the repository
+
+## Initial Setup
 
 ## Initial Setup
 Created AGENT.md file for tracking agent development progress.
