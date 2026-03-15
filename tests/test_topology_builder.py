@@ -102,7 +102,8 @@ def test_generate_topology_output_builds_rooted_tree():
     assert "│     └─ wifi1" in output or "   └─ wifi1" in output
     assert "leaf-host (192.168.0.30) [EE:EE:EE:EE:EE:01]" in output
     assert "direct-host (192.168.0.20) [DD:DD:DD:DD:DD:01]" in output
-    assert "upstream-host" not in output
+    assert "UNRESOLVED HOSTS" in output
+    assert "upstream-host (192.168.0.10) [CC:CC:CC:CC:CC:01]" in output
     print("✓ rooted topology tree test passed")
 
 
@@ -179,6 +180,7 @@ def test_generate_topology_output_hides_shared_segment_hosts_behind_single_child
     assert "Branch (10.0.0.2) [BB:BB:BB:BB:BB:00]" in output
     assert output.count("leaf-host (192.168.0.30) [EE:EE:EE:EE:EE:01]") == 1
     assert "└─ wifi1 [BB:BB:BB:BB:BB:02]" in output
+    assert "UNRESOLVED HOSTS" not in output
     print("✓ shared-segment reduction test passed")
 
 

@@ -878,11 +878,101 @@ class TopologyBuilder:
             return f"{label} ({ip}) [{mac}]"
         return f"{label} [{mac}]"
 
+    def _build_host_candidates(self) -> Dict[str, Dict[str, Any]]:
+        """Build host records from collected data for unresolved-node output."""
+        managed_macs = set()
+        for macs in self._build_local_device_mac_sets().values():
+            managed_macs.update(macs)
+
+        candidates: Dict[str, Dict[str, Any]] = {}
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._clean_name(
+                device_data.get("device_info", {}).get("identity", hostname)
+            )
+
+            for bridge_host in device_data.get("bridge_hosts", []):
+                mac = (bridge_host.get("mac_address") or "").upper()
+                port = self._clean_name(
+                    bridge_host.get("interface") or bridge_host.get("on_interface") or ""
+                )
+                if not mac or mac == "00:00:00:00:00:00" or mac in managed_macs:
+                    continue
+
+                host = candidates.setdefault(mac, {
+                    "name": self._clean_name(self.mac_name_map.get(mac, "")),
+                    "ip": self.mac_ip_map.get(mac, ""),
+                    "seen_on": set(),
+                    "sources": set(),
+                })
+                if port:
+                    host["seen_on"].add(f"{device_name}/{port}")
+                host["sources"].add(f"{device_name}:bridge")
+
+            for dhcp_entry in device_data.get("dhcp_leases", []):
+                mac = (dhcp_entry.get("mac_address") or "").upper()
+                if not mac or mac == "00:00:00:00:00:00" or mac in managed_macs:
+                    continue
+
+                host = candidates.setdefault(mac, {
+                    "name": "",
+                    "ip": "",
+                    "seen_on": set(),
+                    "sources": set(),
+                })
+                host_name = self._clean_name(dhcp_entry.get("host_name", ""))
+                host_ip = dhcp_entry.get("active_address") or dhcp_entry.get("address", "")
+                if host_name:
+                    host["name"] = host_name
+                if host_ip:
+                    host["ip"] = host_ip
+                host["sources"].add(f"{device_name}:dhcp")
+
+            for arp_entry in device_data.get("arp_table", []):
+                mac = (arp_entry.get("mac_address") or "").upper()
+                if not mac or mac == "00:00:00:00:00:00" or mac in managed_macs:
+                    continue
+
+                host = candidates.setdefault(mac, {
+                    "name": "",
+                    "ip": "",
+                    "seen_on": set(),
+                    "sources": set(),
+                })
+                host_ip = arp_entry.get("address", "")
+                if host_ip and not host["ip"]:
+                    host["ip"] = host_ip
+                host["sources"].add(f"{device_name}:arp")
+
+        for mac, host in candidates.items():
+            if not host["name"]:
+                host["name"] = self._clean_name(self.mac_name_map.get(mac, ""))
+            if not host["ip"]:
+                host["ip"] = self.mac_ip_map.get(mac, "")
+
+        return candidates
+
+    def _format_unresolved_host_label(self, mac: str, host: Dict[str, Any]) -> str:
+        """Format one unresolved host line."""
+        name = host.get("name", "")
+        ip = host.get("ip", "")
+        if name and ip and name != ip:
+            return f"{name} ({ip}) [{mac}]"
+        if ip:
+            return f"{ip} [{mac}]"
+        if name:
+            return f"{name} [{mac}]"
+        return f"{mac}"
+
     def _render_device_tree(
         self,
         device_name: str,
         device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
         visited_devices: Set[str],
+        rendered_host_macs: Set[str] = None,
         upstream_port: str = "",
         prefix: str = "",
         port_overrides: Dict[str, List[Dict[str, Any]]] = None,
@@ -894,6 +984,7 @@ class TopologyBuilder:
         port_overrides = port_overrides or {}
         port_labels = port_labels or {}
         device_port_labels = device_port_labels or {}
+        rendered_host_macs = rendered_host_macs if rendered_host_macs is not None else set()
         ports = [
             port
             for port in sorted(
@@ -959,6 +1050,7 @@ class TopologyBuilder:
                         child_name,
                         device_port_endpoints,
                         visited_devices,
+                        rendered_host_macs=rendered_host_macs,
                         upstream_port=child_upstream_port,
                         prefix=endpoint_prefix,
                         device_port_labels=device_port_labels,
@@ -969,6 +1061,7 @@ class TopologyBuilder:
                         lines.append(f"{endpoint_prefix}└─ no downstream endpoints")
                     continue
 
+                rendered_host_macs.add(endpoint["mac"])
                 lines.append(
                     f"{port_prefix}{endpoint_connector} "
                     f"{self._format_endpoint_label(endpoint)}"
@@ -1011,6 +1104,7 @@ class TopologyBuilder:
         lines.append("")
 
         globally_rendered = set()
+        rendered_host_macs = set()
 
         for root_device in root_devices:
             if root_device in globally_rendered:
@@ -1026,6 +1120,7 @@ class TopologyBuilder:
                 root_device,
                 device_port_endpoints,
                 visited_devices,
+                rendered_host_macs=rendered_host_macs,
                 port_overrides=port_overrides,
                 port_labels=port_labels,
                 device_port_labels=device_port_labels,
@@ -1052,6 +1147,7 @@ class TopologyBuilder:
                     device_name,
                     device_port_endpoints,
                     {device_name},
+                    rendered_host_macs=rendered_host_macs,
                     device_port_labels=device_port_labels,
                 )
                 if tree_lines:
@@ -1059,6 +1155,29 @@ class TopologyBuilder:
                 else:
                     lines.append("└─ no port data")
                 lines.append("")
+
+        host_candidates = self._build_host_candidates()
+        unresolved_hosts = [
+            (mac, host)
+            for mac, host in host_candidates.items()
+            if mac not in rendered_host_macs
+        ]
+        unresolved_hosts.sort(
+            key=lambda item: (
+                (item[1].get("name") or item[1].get("ip") or item[0]).lower(),
+                item[0],
+            )
+        )
+        if unresolved_hosts:
+            lines.append("UNRESOLVED HOSTS")
+            lines.append("----------------")
+            for mac, host in unresolved_hosts:
+                lines.append(self._format_unresolved_host_label(mac, host))
+                if host.get("seen_on"):
+                    lines.append(
+                        f"  seen on: {', '.join(sorted(host['seen_on']))}"
+                    )
+            lines.append("")
 
         # Write to file
         try:
