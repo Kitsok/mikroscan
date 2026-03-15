@@ -6,6 +6,11 @@
 2. NO commits without explicit permission - ALWAYS ASK FIRST
 3. Never push to the repository
 
+## Repository Conventions
+- Use `AGENT.md` as the authoritative repository instruction file.
+- Do not rely on `AGENTS.md` for repository-specific instructions.
+- Wrap commit message bodies to a reasonable line length (target 72 chars).
+
 ## Bug Fixes
 - ✅ **Fix SSH port routing (issue identified by user)**
   - Updated `run_full_mapping()` to accept port parameter
