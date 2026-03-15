@@ -606,7 +606,7 @@ class MikrotikMapper:
         logger.info("Full network mapping workflow complete")
         return connection_map
     
-    def generate_refactored_topology(self, data_file: str, output_file: str = "data/topology.txt"):
+    def generate_refactored_topology(self, data_file: str, output_file: str = "data/refactored_topology.txt"):
         """
         Generate network topology using the refactored approach.
         
@@ -839,7 +839,7 @@ Examples:
         logger.info("Generating refactored network topology")
         mapper.generate_refactored_topology(
             data_file=args.data_file,
-            output_file="data/topology.txt"
+            output_file="data/refactored_topology.txt"
         )
         return
     
