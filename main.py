@@ -174,6 +174,136 @@ class MikrotikMapper:
         logger.info("Connection map building complete")
         return connection_map
     
+    def generate_topology_diagram(self, data_file: str, output_file: str = "data/topology.txt"):
+        """
+        Generate a network topology diagram from collected data.
+        
+        Args:
+            data_file (str): JSON file with collected device data
+            output_file (str): Output file for topology diagram
+        """
+        logger.info(f"Generating network topology diagram from {data_file}")
+        
+        # Load collected data
+        try:
+            with open(data_file, 'r') as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load data from {data_file}: {e}")
+            return False
+        
+        # Generate topology diagram
+        topology_lines = []
+        topology_lines.append("NETWORK TOPOLOGY DIAGRAM")
+        topology_lines.append("=" * 25)
+        topology_lines.append("")
+        
+        # Separate devices by type
+        routers = []
+        switches = []
+        access_points = []
+        other_devices = []
+        
+        # Collect all devices and their information
+        all_devices = []
+        
+        for ip, device in data.items():
+            if device.get('connected') and 'device_info' in device:
+                identity = device['device_info'].get('identity', ip)
+                model = device['device_info'].get('model', '').lower()
+                all_devices.append({'identity': identity, 'ip': ip, 'device': device, 'model': model})
+                
+                # Categorize devices
+                if 'router' in model or 'rb' in model or ip.endswith('.254'):
+                    routers.append({'identity': identity, 'ip': ip, 'device': device, 'model': model})
+                elif 'switch' in model or 'crs' in model:
+                    switches.append({'identity': identity, 'ip': ip, 'device': device, 'model': model})
+                elif 'hap' in model or 'wap' in model or 'ap' in identity.lower():
+                    access_points.append({'identity': identity, 'ip': ip, 'device': device, 'model': model})
+                else:
+                    other_devices.append({'identity': identity, 'ip': ip, 'device': device, 'model': model})
+        
+        # Create topology visualization
+        topology_lines.append("Discovered Network Devices:")
+        topology_lines.append("-" * 28)
+        
+        if routers:
+            topology_lines.append(f"Routers ({len(routers)}):")
+            for router in routers:
+                topology_lines.append(f"  • {router['identity']} ({router['ip']}) - {router['model']}")
+        
+        if switches:
+            topology_lines.append(f"Switches ({len(switches)}):")
+            for switch in switches:
+                topology_lines.append(f"  • {switch['identity']} ({switch['ip']}) - {switch['model']}")
+        
+        if access_points:
+            topology_lines.append(f"Access Points ({len(access_points)}):")
+            for ap in access_points:
+                topology_lines.append(f"  • {ap['identity']} ({ap['ip']}) - {ap['model']}")
+        
+        if other_devices:
+            topology_lines.append(f"Other Devices ({len(other_devices)}):")
+            for device in other_devices:
+                topology_lines.append(f"  • {device['identity']} ({device['ip']}) - {device['model']}")
+        
+        # Analyze connections based on ARP data
+        topology_lines.append("")
+        topology_lines.append("Network Connectivity Analysis:")
+        topology_lines.append("-" * 30)
+        
+        # Find which devices can see the router
+        router_ips = [r['ip'] for r in routers]
+        devices_seeing_router = []
+        
+        for device_info in all_devices:
+            device = device_info['device']
+            if 'arp_table' in device:
+                for entry in device['arp_table']:
+                    entry_str = str(entry)
+                    for router_ip in router_ips:
+                        if router_ip in entry_str:
+                            devices_seeing_router.append(device_info['identity'])
+                            break
+        
+        topology_lines.append(f"Devices that can reach main router: {len(devices_seeing_router)}")
+        if devices_seeing_router:
+            topology_lines.append("  " + ", ".join(sorted(devices_seeing_router)))
+        
+        # Add inferred network structure
+        topology_lines.append("")
+        topology_lines.append("Inferred Network Structure:")
+        topology_lines.append("-" * 27)
+        topology_lines.append("All devices are on the same subnet and can communicate directly.")
+        topology_lines.append("Physical connections may include intermediate switches not detectable via ARP.")
+        
+        # Add intelligent recommendations based on device types
+        topology_lines.append("")
+        topology_lines.append("Intelligent Recommendations:")
+        topology_lines.append("-" * 28)
+        
+        if len(switches) > 0 and len(access_points) > 2:
+            topology_lines.append("• Consider organizing APs through managed switch for better control")
+        
+        if len(routers) == 1:
+            topology_lines.append("• Single router architecture provides centralized network management")
+        
+        topology_lines.append("• Use LLDP/CDP protocols for accurate physical topology discovery")
+        topology_lines.append("• Check managed switch interfaces for port-to-port mapping")
+        topology_lines.append("• Physical site survey needed for exact cable connections")
+        
+        # Write to file
+        try:
+            with open(output_file, 'w') as f:
+                f.write('\n'.join(topology_lines))
+            logger.info(f"Topology diagram saved to {output_file}")
+            print(f"\nNetwork Topology Diagram saved to: {output_file}")
+            print("\n" + "\n".join(topology_lines))
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save topology diagram to {output_file}: {e}")
+            return False
+    
     def run_full_mapping(self, ip_range: str, username: str = None, password: str = None,
                          key_file: str = None, port: int = 22, timeout: int = 5,
                          verbose: bool = False) -> dict:
@@ -238,10 +368,13 @@ Examples:
   python3 main.py 192.168.1.0/24 -u admin -p password
   
   # Use existing scan results
-  python3 main.py --scan-file scan_results.json -u admin -p password
+  python3 main.py --scan-file data/scan_results.json -u admin -p password
   
   # Use existing collected data
-  python3 main.py --data-file collected_data.json
+  python3 main.py --data-file data/collected_data.json
+  
+  # Generate network topology diagram
+  python3 main.py --generate-topology --data-file data/collected_data.json
   
   # Store credentials for later use
   python3 main.py --store-credentials --hostname 192.168.1.1 -u admin -p password
@@ -264,6 +397,12 @@ Examples:
     parser.add_argument(
         "--data-file",
         help="Use existing collected data file"
+    )
+    
+    parser.add_argument(
+        "--generate-topology",
+        action="store_true",
+        help="Generate network topology diagram from collected data"
     )
     
     # Credential management
@@ -384,6 +523,21 @@ Examples:
             print("Failed to set master password")
         return
     
+    # Handle topology generation (doesn't need authentication)
+    if args.generate_topology:
+        # Generate network topology diagram
+        if not args.data_file:
+            parser.error("--generate-topology requires --data-file")
+        
+        # Create mapper just for topology generation
+        mapper = MikrotikMapper()
+        logger.info("Generating network topology diagram")
+        mapper.generate_topology_diagram(
+            data_file=args.data_file,
+            output_file="data/topology.txt"
+        )
+        return
+    
     # Create mapper
     mapper = MikrotikMapper()
     
@@ -427,6 +581,17 @@ Examples:
                     output_file=args.output,
                     readable_file="data/connections.txt"
                 )
+                
+        elif args.generate_topology:
+            # Generate network topology diagram
+            if not args.data_file:
+                parser.error("--generate-topology requires --data-file")
+            
+            logger.info("Generating network topology diagram")
+            mapper.generate_topology_diagram(
+                data_file=args.data_file,
+                output_file="data/topology.txt"
+            )
                 
         else:
             # Run full workflow

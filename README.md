@@ -90,17 +90,18 @@ Then run mapping without specifying credentials (will prompt for master password
 python3 main.py 192.168.1.0/24
 ```
 
-### Using Existing Data
+### Generate Network Topology Diagram
 
-Use previously collected scan results:
+Create a network topology diagram from collected data:
 ```bash
-python3 main.py --scan-file data/scan_results.json -u admin -p password
+python3 main.py --generate-topology --data-file data/collected_data.json
 ```
 
-Use previously collected device data:
-```bash
-python3 main.py --data-file data/collected_data.json
-```
+This will generate a topology diagram showing:
+- Categorized devices (routers, switches, access points)
+- Network connectivity analysis
+- Intelligent recommendations for network optimization
+- Output saved to `data/topology.txt`
 
 ## Running Tests
 
