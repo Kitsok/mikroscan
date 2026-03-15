@@ -254,6 +254,45 @@ class MikrotikMapper:
             
             return {'ip': ip, 'mac': full_mac, 'interface': interface} if ip and full_mac else None
         
+        # Helper function to parse interface entries for physical port info
+        def parse_interface_entry(entry):
+            """Parse interface entry to extract MAC and potential physical port info."""
+            interfaces = []
+            
+            for key, value in entry.items():
+                # Look for MAC address fragments in key
+                mac_key_match = re.search(r'mac_address=([0-9A-F]{2})', key)
+                if mac_key_match:
+                    prefix = mac_key_match.group(1)
+                    if re.match(r'^[0-9A-F:]{14}$', str(value)):
+                        full_mac = f"{prefix}:{value}"
+                        # Look for interface/port naming in the entry
+                        port_info = None
+                        # Check for port-like identifiers
+                        entry_str = str(entry)
+                        port_matches = re.findall(r'(ether\d+|port\d+|eth\d+|[a-zA-Z]+\d+)', entry_str)
+                        if port_matches:
+                            # Take the first port identifier as most likely
+                            port_info = port_matches[0]
+                        
+                        interfaces.append({'mac': full_mac, 'port': port_info})
+            
+            return interfaces
+        
+        # Create device MAC mapping for lookups
+        device_mac_mapping = {}
+        for ip, device in data.items():
+            if device.get("connected", False):
+                device_name = device["device_info"].get("identity", ip)
+                interfaces = []
+                for interface_entry in device.get("interfaces", []):
+                    parsed = parse_interface_entry(interface_entry)
+                    interfaces.extend(parsed)
+                device_mac_mapping[ip] = {
+                    'name': device_name,
+                    'interfaces': interfaces
+                }
+        
         # Create topology visualization
         topology_lines.append("Discovered Network Devices:")
         topology_lines.append("-" * 28)
@@ -336,6 +375,115 @@ class MikrotikMapper:
         
         topology_lines.append("• All devices operate within the same logical subnet")
         
+        # Add port-to-port connection details with physical interfaces
+        topology_lines.append("")
+        topology_lines.append("Port-to-Port Connections:")
+        topology_lines.append("-" * 26)
+        
+        # Show direct device-to-device connections with physical interfaces
+        connections_shown = set()
+        connection_lines = []
+        
+        for local_ip, local_data in data.items():
+            if local_data.get("connected", False):
+                local_name = local_data["device_info"].get("identity", local_ip)
+                
+                # Process ARP table for connections
+                for arp_entry in local_data.get("arp_table", []):
+                    if arp_entry:
+                        entry_key = list(arp_entry.keys())[0]
+                        entry_value = list(arp_entry.values())[0]
+                        
+                        # Parse ARP entry
+                        ip_match = re.search(r'address=([\d\.]+)', entry_key)
+                        mac_prefix_match = re.search(r'mac_address=([0-9A-F]{2})', entry_key)
+                        mac_suffix_match = re.search(r'^([0-9A-F:]{14})', entry_value)
+                        interface_match = re.search(r'interface=([^\s]+)', entry_value)
+                        
+                        if all([ip_match, mac_prefix_match, mac_suffix_match]):
+                            remote_ip = ip_match.group(1)
+                            full_mac = f"{mac_prefix_match.group(1)}:{mac_suffix_match.group(1)}"
+                            local_interface = interface_match.group(1) if interface_match else "unknown"
+                            
+                            # Find remote device name if it exists in our data
+                            if remote_ip in data:
+                                remote_data = data[remote_ip]
+                                remote_name = remote_data["device_info"].get("identity", remote_ip)
+                                
+                                # Try to determine physical port for remote device
+                                remote_port = "unknown"
+                                if remote_ip in device_mac_mapping:
+                                    remote_interfaces = device_mac_mapping[remote_ip]['interfaces']
+                                    for iface in remote_interfaces:
+                                        if iface['mac'].upper() == full_mac.upper():
+                                            remote_port = iface['port'] if iface['port'] else "unknown"
+                                            break
+                                
+                                # Create connection string (avoid duplicates)
+                                connection1 = f"{local_name}:{local_interface} <-> {remote_name}:{remote_port}"
+                                connection2 = f"{remote_name}:{remote_port} <-> {local_name}:{local_interface}"
+                                
+                                if connection1 not in connections_shown and connection2 not in connections_shown:
+                                    connection_lines.append(f"• {local_name}:{local_interface} <-> {remote_name}:{remote_port} [{full_mac}]")
+                                    connections_shown.add(connection1)
+        
+        if connection_lines:
+            # Sort connections for consistent output
+            connection_lines.sort()
+            topology_lines.extend(connection_lines)
+        else:
+            topology_lines.append("No direct port connections identified")
+        
+        # Add logical topology with inferred physical connections
+        topology_lines.append("")
+        topology_lines.append("Physical Network Topology:")
+        topology_lines.append("-" * 27)
+        
+        # Show inferred switch connections
+        if switches and access_points:
+            main_switch = switches[0]
+            topology_lines.append("Inferred physical connections through switch:")
+            
+            # For each AP, infer a connection to the switch
+            for ap in sorted(access_points, key=lambda x: x['identity']):
+                # Try to find actual connection from switch to AP
+                switch_ip = main_switch['ip']
+                if switch_ip in data:
+                    switch_data = data[switch_ip]
+                    ap_found = False
+                    
+                    for arp_entry in switch_data.get("arp_table", []):
+                        if arp_entry:
+                            entry_key = list(arp_entry.keys())[0]
+                            entry_value = list(arp_entry.values())[0]
+                            ip_match = re.search(r'address=([\d\.]+)', entry_key)
+                            
+                            if ip_match and ip_match.group(1) == ap['ip']:
+                                # Found connection, parse it
+                                mac_prefix_match = re.search(r'mac_address=([0-9A-F]{2})', entry_key)
+                                mac_suffix_match = re.search(r'^([0-9A-F:]{14})', entry_value)
+                                interface_match = re.search(r'interface=([^\s]+)', entry_value)
+                                
+                                if all([mac_prefix_match, mac_suffix_match]):
+                                    full_mac = f"{mac_prefix_match.group(1)}:{mac_suffix_match.group(1)}"
+                                    switch_interface = interface_match.group(1) if interface_match else "unknown"
+                                    
+                                    # Try to get actual port name from interface data
+                                    actual_port = "port"
+                                    if switch_ip in device_mac_mapping:
+                                        switch_interfaces = device_mac_mapping[switch_ip]['interfaces']
+                                        for iface in switch_interfaces:
+                                            if iface['mac'].upper() == full_mac.upper() and iface['port']:
+                                                actual_port = iface['port']
+                                                break
+                                    
+                                    topology_lines.append(f"• {main_switch['identity']}:{actual_port} <-> {ap['identity']}:LAN")
+                                    ap_found = True
+                                    break
+                    
+                    if not ap_found:
+                        topology_lines.append(f"• {main_switch['identity']}:ether? <-> {ap['identity']}:LAN")
+        
         # Add intelligent recommendations based on device types and connections
         topology_lines.append("")
         topology_lines.append("Intelligent Recommendations:")
@@ -349,8 +497,8 @@ class MikrotikMapper:
         if len(routers) >= 1:
             topology_lines.append("• Centralized routing through main router simplifies network management")
         
-        topology_lines.append("• Use LLDP/CDP protocols for more accurate physical topology discovery")
-        topology_lines.append("• Document switch port assignments for easier troubleshooting")
+        topology_lines.append("• Enable LLDP on all devices for accurate physical port discovery")
+        topology_lines.append("• Document actual switch port assignments for easier troubleshooting")
         topology_lines.append("• Monitor bandwidth utilization on key network segments")
         
         # Write to file
