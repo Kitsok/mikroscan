@@ -124,6 +124,40 @@ def test_generate_readable_output():
     assert "ether2 on router1 is connected to host host1" in descriptions
     print("✓ generate_readable_output test passed")
 
+def test_host_connections_use_bridge_host_interface():
+    """Test host connections resolve their interface from bridge host data."""
+    mapper = ConnectionMapper()
+
+    mapper.set_data({
+        "192.168.1.1": {
+            "hostname": "192.168.1.1",
+            "connected": True,
+            "device_info": {"identity": "router1"},
+            "interfaces": [{"name": "bridge", "mac_address": "AA:BB:CC:DD:EE:FF"}],
+            "bridge_ports": [{"interface": "ether3"}],
+            "bridge_hosts": [
+                {"interface": "ether3", "mac_address": "00:11:22:33:44:55"}
+            ],
+            "arp_table": [
+                {"address": "192.168.1.50", "mac_address": "00:11:22:33:44:55"}
+            ],
+            "dhcp_leases": [
+                {"mac_address": "00:11:22:33:44:55", "host_name": "host1"}
+            ]
+        }
+    })
+
+    connection_map = mapper.build_connection_map()
+    host_connections = [
+        connection for connection in connection_map["connections"]
+        if connection["type"] == "host_connection"
+    ]
+
+    assert len(host_connections) == 1
+    assert host_connections[0]["source_interface"] == "ether3"
+    assert host_connections[0]["destination_host"] == "host1"
+    print("✓ host interface resolution test passed")
+
 def main():
     """Run all mapping tests."""
     print("Running Connection Mapper Tests...")
@@ -133,6 +167,7 @@ def main():
         test_set_and_load_data()
         test_save_and_load_map()
         test_generate_readable_output()
+        test_host_connections_use_bridge_host_interface()
         
         print("\nAll Connection Mapper tests passed! ✓")
         return 0

@@ -21,6 +21,7 @@ class ConnectionMapper:
         self.devices_data = {}
         self.connection_map = {}
         self.device_mac_map = {}
+        self.host_interface_map = {}
     
     def load_data(self, filename: str) -> Dict:
         """
@@ -66,6 +67,7 @@ class ConnectionMapper:
             "hosts": {}
         }
         self.device_mac_map = self._build_device_mac_map()
+        self.host_interface_map = self._build_host_interface_map()
         
         # Process each device
         for hostname, device_data in self.devices_data.items():
@@ -170,6 +172,26 @@ class ConnectionMapper:
                     mac_map[mac] = device_id
 
         return mac_map
+
+    def _build_host_interface_map(self) -> Dict[str, Dict[str, str]]:
+        """Build per-device MAC-to-interface mappings from bridge host data."""
+        host_interface_map = {}
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_id = device_data.get("device_info", {}).get("identity", hostname)
+            device_host_map = {}
+            for host in device_data.get("bridge_hosts", []):
+                mac_address = (host.get("mac_address") or "").upper()
+                interface_name = host.get("interface") or host.get("on_interface")
+                if mac_address and interface_name and mac_address not in device_host_map:
+                    device_host_map[mac_address] = interface_name
+
+            host_interface_map[device_id] = device_host_map
+
+        return host_interface_map
     
     def _process_hosts(self):
         """Process ARP table and DHCP leases to identify hosts."""
@@ -245,10 +267,14 @@ class ConnectionMapper:
             if host["seen_on_devices"]:
                 # For simplicity, connect to the first device that reported this host
                 source_device = host["seen_on_devices"][0]
+                source_interface = self.host_interface_map.get(source_device, {}).get(
+                    mac_address.upper(),
+                    "unknown"
+                )
                 
                 connection = {
                     "source_device": source_device,
-                    "source_interface": "unknown",  # Would need more detailed analysis to determine actual interface
+                    "source_interface": source_interface,
                     "destination_host": host.get("hostname", mac_address),
                     "mac_address": mac_address,
                     "ip_addresses": host["ip_addresses"],
