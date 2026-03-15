@@ -175,7 +175,7 @@ class MikrotikMapper:
         return connection_map
     
     def run_full_mapping(self, ip_range: str, username: str = None, password: str = None,
-                         key_file: str = None, timeout: int = 5) -> dict:
+                         key_file: str = None, port: int = 22, timeout: int = 5) -> dict:
         """
         Run complete network mapping workflow.
         
@@ -184,6 +184,7 @@ class MikrotikMapper:
             username (str): SSH username
             password (str, optional): SSH password
             key_file (str, optional): Private key file
+            port (int): SSH port (default: 22)
             timeout (int): Timeout for operations
             
         Returns:
@@ -209,6 +210,7 @@ class MikrotikMapper:
             password=password,
             key_file=key_file,
             output_file="collected_data.json",
+            port=port,
             timeout=timeout + 5  # Give more time for data collection
         )
         
@@ -396,6 +398,7 @@ Examples:
                 username=args.username,
                 password=args.password,
                 key_file=args.key_file,
+                port=args.ssh_port,
                 timeout=args.timeout
             )
         

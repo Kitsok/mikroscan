@@ -6,7 +6,14 @@
 2. NO commits without explicit permission - ALWAYS ASK FIRST
 3. Never push to the repository
 
-## Initial Setup
+## Bug Fixes
+- ✅ **Fix SSH port routing (issue identified by user)**
+  - Updated `run_full_mapping()` to accept port parameter
+  - Modified main function to pass `args.ssh_port` to `run_full_mapping()`
+  - Fixed `collect_data()` call in `run_full_mapping()` to include port parameter
+  - Verified SSH client properly uses port parameter in connection
+  - Confirmed `--ssh-port` option appears in help output
+  - Code changes verified in source files
 
 ## Initial Setup
 Created AGENT.md file for tracking agent development progress.

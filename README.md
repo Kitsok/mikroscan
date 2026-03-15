@@ -31,6 +31,13 @@ Scan a network range and map connections:
 python3 main.py 192.168.1.0/24 -u admin -p password
 ```
 
+### Network Mapping with Custom SSH Port
+
+Scan and map connections using a custom SSH port:
+```bash
+python3 main.py --ssh-port 10021 192.168.1.0/24 -u admin -p password
+```
+
 ### Using Stored Credentials
 
 Store credentials for later use:
