@@ -4,6 +4,7 @@ set -euo pipefail
 
 APP_DIR="/opt/mikroscan"
 PERSIST_ROOT="/data/mikroscan"
+VIRTUAL_ENV="/opt/venv"
 
 mkdir -p "${PERSIST_ROOT}/data" "${PERSIST_ROOT}/logs"
 rm -rf "${APP_DIR}/data" "${APP_DIR}/logs"
@@ -59,4 +60,4 @@ export MIKROSCAN_ALLOWED_CLIENTS="172.30.32.2,127.0.0.1,::1"
 
 bashio::log.info "Starting Mikroscan app"
 cd "${APP_DIR}"
-exec python3 "${ARGS[@]}"
+exec "${VIRTUAL_ENV}/bin/python" "${ARGS[@]}"
