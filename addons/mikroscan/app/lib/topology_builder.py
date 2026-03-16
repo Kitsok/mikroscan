@@ -1,0 +1,1991 @@
+#!/usr/bin/env python3
+"""Topology builder for MikroTik Mapper."""
+
+import ipaddress
+import json
+import logging
+import os
+import re
+from datetime import datetime, timezone
+from typing import Dict, List, Set, Tuple, Any
+from collections import defaultdict
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+class TopologyBuilder:
+    """Builds a rooted network topology tree from collected device data."""
+    
+    def __init__(self):
+        """Initialize the topology builder."""
+        self.devices_data = {}
+        self.mac_name_map = {}
+        self.mac_ip_map = {}
+        self.ip_name_map = {}
+        self.mac_port_map = {}
+        self.device_label_map = {}
+        self.overlay_interface_types = {"wireguard", "wg", "zerotier"}
+
+    def _clean_name(self, name: str) -> str:
+        """Normalize display names parsed from RouterOS output."""
+        if not name:
+            return ""
+        return name.strip().strip('"').strip()
+
+    def _build_device_label_map(self) -> Dict[str, str]:
+        """Build stable per-host labels, disambiguating duplicate identities."""
+        identity_counts = defaultdict(int)
+        identities = {}
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            identity = self._clean_name(
+                device_data.get("device_info", {}).get("identity", hostname)
+            ) or hostname
+            identities[hostname] = identity
+            identity_counts[identity] += 1
+
+        labels = {}
+        for hostname, identity in identities.items():
+            if identity_counts[identity] > 1:
+                labels[hostname] = f"{identity} ({hostname})"
+            else:
+                labels[hostname] = identity
+
+        self.device_label_map = labels
+        return labels
+
+    def _get_device_label(self, hostname: str, device_data: Dict[str, Any]) -> str:
+        """Return the stable label for a managed device."""
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        return self.device_label_map.get(
+            hostname,
+            self._clean_name(device_data.get("device_info", {}).get("identity", hostname))
+            or hostname,
+        )
+
+    def _build_known_device_maps(self):
+        """
+        Build MAC-to-device and MAC-to-IP maps from the collected MikroTik
+        devices themselves.
+
+        Returns:
+            tuple[dict, dict]: MAC-to-name and MAC-to-IP mappings
+        """
+        device_name_map = {}
+        device_ip_map = {}
+
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._get_device_label(hostname, device_data)
+            device_ip = device_data.get("hostname", hostname)
+
+            for interface in device_data.get("interfaces", []):
+                mac = (interface.get("mac_address") or interface.get("link_layer_address") or "").upper()
+                if not mac:
+                    continue
+                if mac == "00:00:00:00:00:00":
+                    continue
+                if device_name:
+                    device_name_map[mac] = device_name
+                if device_ip:
+                    device_ip_map[mac] = device_ip
+
+        return device_name_map, device_ip_map
+
+    def _build_known_identity_ip_map(self) -> Dict[str, str]:
+        """Build a mapping of managed device identity to management IP."""
+        identity_ip_map = {}
+
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            identity = self._get_device_label(hostname, device_data)
+            management_ip = device_data.get("hostname", hostname)
+            if identity and management_ip:
+                identity_ip_map[identity] = management_ip
+
+        return identity_ip_map
+
+    def _build_known_device_interface_map(self) -> Dict[str, Dict[str, str]]:
+        """Build MAC-to-device-interface mapping for managed MikroTik ports."""
+        interface_map = {}
+
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._get_device_label(hostname, device_data)
+            device_ip = device_data.get("hostname", hostname)
+
+            for interface in device_data.get("interfaces", []):
+                mac = (
+                    interface.get("mac_address")
+                    or interface.get("link_layer_address")
+                    or ""
+                ).upper()
+                port = self._clean_name(interface.get("name", ""))
+                if not mac or not port or mac == "00:00:00:00:00:00":
+                    continue
+
+                new_entry = {
+                    "device": device_name,
+                    "port": port,
+                    "ip": device_ip,
+                }
+                current_entry = interface_map.get(mac)
+                if current_entry:
+                    current_is_physical = self._is_physical_interface(current_entry["port"])
+                    new_is_physical = self._is_physical_interface(port)
+                    if current_is_physical and not new_is_physical:
+                        continue
+                    if current_is_physical == new_is_physical and current_entry["port"] <= port:
+                        continue
+
+                interface_map[mac] = new_entry
+
+        return interface_map
+
+    def _normalize_interface_type(self, interface_data: Dict[str, Any] | None) -> str:
+        """Return a normalized interface type for rendering decisions."""
+        if not interface_data:
+            return ""
+        return self._clean_name(interface_data.get("type", "")).lower()
+
+    def _is_physical_interface(
+        self,
+        interface: str,
+        interface_data: Dict[str, Any] | None = None,
+    ) -> bool:
+        """Return True for interfaces we want to render in the topology tree."""
+        if not interface and not interface_data:
+            return False
+
+        interface_type = self._normalize_interface_type(interface_data)
+        if interface_type in self.overlay_interface_types:
+            return True
+
+        interface = (interface or "").lower()
+        return any(
+            interface.startswith(prefix)
+            for prefix in ("ether", "wifi", "wlan", "sfp", "combo")
+        )
+
+    def _is_standalone_overlay_interface(
+        self,
+        interface_name: str,
+        interface_data: Dict[str, Any],
+        interface_ip_map: Dict[str, str],
+    ) -> bool:
+        """Return True for overlay interfaces that should render without endpoints."""
+        interface_type = self._normalize_interface_type(interface_data)
+        if interface_type not in self.overlay_interface_types:
+            return False
+
+        return bool(
+            self._get_interface_mac(interface_data)
+            or interface_ip_map.get(interface_name)
+            or interface_data.get("running") == "true"
+            or interface_data.get("disabled") == "false"
+        )
+
+    def _build_local_device_mac_sets(self) -> Dict[str, Set[str]]:
+        """Build a map of managed device names to their own interface MACs."""
+        device_mac_sets = defaultdict(set)
+
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._get_device_label(hostname, device_data)
+            for interface in device_data.get("interfaces", []):
+                mac = (
+                    interface.get("mac_address")
+                    or interface.get("link_layer_address")
+                    or ""
+                ).upper()
+                if mac and mac != "00:00:00:00:00:00":
+                    device_mac_sets[device_name].add(mac)
+
+        return device_mac_sets
+
+    def _find_public_ip_entries(self, device_data: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Return public IPv4 addresses with their owning interface names."""
+        public_entries = []
+
+        for ip_entry in device_data.get("ip_addresses", []):
+            address = ip_entry.get("address", "")
+            if not address:
+                continue
+
+            ip_part = address.split("/")[0]
+            if not self._is_public_ip(ip_part):
+                continue
+
+            interface_name = (
+                ip_entry.get("actual_interface")
+                or ip_entry.get("interface")
+                or ""
+            )
+            public_entries.append({
+                "address": address,
+                "interface": interface_name,
+            })
+
+        return public_entries
+
+    def _score_interface_parent_candidate(
+        self,
+        child_interface: Dict[str, Any],
+        candidate_interface: Dict[str, Any],
+    ) -> int:
+        """Rank likely lower-layer parent interfaces for WAN chain inference."""
+        child_name = self._clean_name(child_interface.get("name", "")).lower()
+        candidate_name = self._clean_name(candidate_interface.get("name", "")).lower()
+        candidate_type = candidate_interface.get("type", "").lower()
+        candidate_default = self._clean_name(
+            candidate_interface.get("default_name", "")
+        ).lower()
+        score = 0
+
+        if "wan" in child_name and "wan" in candidate_name:
+            score += 10
+        if candidate_type == "vlan":
+            score += 8
+        elif candidate_type == "ether":
+            score += 6
+
+        child_mac = (child_interface.get("mac_address") or "").upper()
+        candidate_mac = (candidate_interface.get("mac_address") or "").upper()
+        if child_mac and candidate_mac and child_mac == candidate_mac:
+            score += 20
+
+        if candidate_default and candidate_default in child_name:
+            score += 6
+        if candidate_name and candidate_name in child_name:
+            score += 4
+
+        shared_tokens = (
+            set(token for token in re.split(r"[^a-z0-9]+", child_name) if token)
+            & set(token for token in re.split(r"[^a-z0-9]+", candidate_name) if token)
+        ) - {"pppoe", "out", "vlan"}
+        score += len(shared_tokens) * 2
+
+        return score
+
+    def _find_interface_parent(
+        self,
+        interface_name: str,
+        interfaces_by_name: Dict[str, Dict[str, Any]],
+    ) -> str:
+        """Infer a lower-layer parent interface for the given interface."""
+        current_interface = interfaces_by_name.get(interface_name)
+        if not current_interface:
+            return ""
+
+        for key in (
+            "interface",
+            "master_interface",
+            "parent_interface",
+            "underlying_interface",
+            "running_on",
+        ):
+            parent_name = self._clean_name(current_interface.get(key, ""))
+            if parent_name and parent_name in interfaces_by_name:
+                return parent_name
+
+        candidate_scores = []
+        for candidate_name, candidate_interface in interfaces_by_name.items():
+            if candidate_name == interface_name:
+                continue
+
+            score = self._score_interface_parent_candidate(
+                current_interface,
+                candidate_interface,
+            )
+            if score > 0:
+                candidate_scores.append((score, candidate_name))
+
+        if not candidate_scores:
+            return ""
+
+        candidate_scores.sort(reverse=True)
+        best_score, best_name = candidate_scores[0]
+        if best_score < 8:
+            return ""
+        return best_name
+
+    def _build_wan_chain(
+        self,
+        device_data: Dict[str, Any],
+        public_entry: Dict[str, str],
+    ) -> List[str]:
+        """Build physical-to-logical WAN interface chain for a public IP."""
+        interfaces_by_name = {
+            self._clean_name(interface.get("name", "")): interface
+            for interface in device_data.get("interfaces", [])
+            if interface.get("name")
+        }
+
+        chain = []
+        current_name = self._clean_name(public_entry.get("interface", ""))
+        seen_names = set()
+
+        while current_name and current_name not in seen_names:
+            chain.append(current_name)
+            seen_names.add(current_name)
+            current_name = self._find_interface_parent(current_name, interfaces_by_name)
+
+        chain.reverse()
+        return chain
+
+    def _format_root_wan_summary(self, device_data: Dict[str, Any]) -> str:
+        """Format WAN summary including physical-to-logical interface chain."""
+        public_entries = self._find_public_ip_entries(device_data)
+        if not public_entries:
+            return ""
+
+        formatted_entries = []
+        for public_entry in public_entries[:3]:
+            chain = self._build_wan_chain(device_data, public_entry)
+            if chain:
+                formatted_entries.append(
+                    f"{' -> '.join(chain)} ({public_entry['address']})"
+                )
+            else:
+                formatted_entries.append(public_entry["address"])
+
+        return " | ".join(formatted_entries)
+
+    def _get_interfaces_by_name(
+        self,
+        device_data: Dict[str, Any],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Map interface names to interface records."""
+        return {
+            self._clean_name(interface.get("name", "")): interface
+            for interface in device_data.get("interfaces", [])
+            if interface.get("name")
+        }
+
+    def _get_interface_mac(self, interface_data: Dict[str, Any]) -> str:
+        """Return the best MAC address available for an interface."""
+        return (
+            interface_data.get("mac_address")
+            or interface_data.get("link_layer_address")
+            or ""
+        ).upper()
+
+    def _build_interface_ip_map(self, device_data: Dict[str, Any]) -> Dict[str, str]:
+        """Map interface names to one IPv4/CIDR address when available."""
+        interface_ip_map = {}
+
+        for ip_entry in device_data.get("ip_addresses", []):
+            address = ip_entry.get("address", "")
+            interface_name = (
+                self._clean_name(ip_entry.get("actual_interface", ""))
+                or self._clean_name(ip_entry.get("interface", ""))
+            )
+            if not address or not interface_name:
+                continue
+            if interface_name not in interface_ip_map:
+                interface_ip_map[interface_name] = address
+
+        return interface_ip_map
+
+    def _get_vlan_label(self, interface_name: str, interface_data: Dict[str, Any]) -> str:
+        """Return a display suffix for VLAN interfaces when VLAN ID is known."""
+        if interface_data.get("type", "").lower() != "vlan":
+            return ""
+
+        vlan_id = (
+            interface_data.get("vlan_id")
+            or interface_data.get("vlanid")
+            or interface_data.get("vlan")
+            or ""
+        )
+        if not vlan_id:
+            match = re.search(r"vlan[-_ ]?(\d+)", interface_name, re.IGNORECASE)
+            if match:
+                vlan_id = match.group(1)
+
+        if vlan_id:
+            return f" [vlan {vlan_id}]"
+        return ""
+
+    def _get_poe_label(self, interface_data: Dict[str, Any]) -> str:
+        """Return a display suffix for Ethernet ports providing PoE output."""
+        if interface_data.get("type", "").lower() != "ether":
+            return ""
+
+        poe_power = (
+            interface_data.get("poe_out_power")
+            or interface_data.get("poe_out_power_w")
+            or ""
+        )
+        if poe_power:
+            return f" [PoE: {poe_power}]"
+
+        poe_status = (interface_data.get("poe_out_status") or "").lower()
+        active_statuses = {
+            "powered-on",
+            "delivering-power",
+            "waiting-for-load",
+            "searching-for-load",
+        }
+        if poe_status in active_statuses:
+            return f" [PoE: {interface_data.get('poe_out_status')}]"
+
+        return ""
+
+    def _get_overlay_type_label(self, interface_data: Dict[str, Any]) -> str:
+        """Return a display suffix for overlay interface types."""
+        interface_type = self._normalize_interface_type(interface_data)
+        if interface_type in {"wireguard", "wg"}:
+            return " [WireGuard]"
+        if interface_type == "zerotier":
+            return " [ZeroTier]"
+        return ""
+
+    def _format_interface_label(
+        self,
+        interface_name: str,
+        interface_data: Dict[str, Any],
+        address: str = "",
+    ) -> str:
+        """Format an interface node label for the topology tree."""
+        label = interface_name
+        if address:
+            label += f" ({address})"
+
+        mac_address = self._get_interface_mac(interface_data)
+        if mac_address:
+            label += f" [{mac_address}]"
+
+        label += self._get_vlan_label(interface_name, interface_data)
+        label += self._get_poe_label(interface_data)
+        label += self._get_overlay_type_label(interface_data)
+        return label
+
+    def _build_device_standalone_ports(self) -> Dict[str, Set[str]]:
+        """Build overlay ports that should render even without bridge-host endpoints."""
+        standalone_ports: Dict[str, Set[str]] = defaultdict(set)
+
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._get_device_label(hostname, device_data)
+            interfaces_by_name = self._get_interfaces_by_name(device_data)
+            interface_ip_map = self._build_interface_ip_map(device_data)
+
+            for interface_name, interface_data in interfaces_by_name.items():
+                if self._is_standalone_overlay_interface(
+                    interface_name,
+                    interface_data,
+                    interface_ip_map,
+                ):
+                    standalone_ports[device_name].add(interface_name)
+
+        return {device_name: set(ports) for device_name, ports in standalone_ports.items()}
+
+    def _build_wan_port_overrides(
+        self,
+        device_data: Dict[str, Any],
+    ) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[str, str]]:
+        """Build synthetic WAN branches rendered under the root WAN port."""
+        public_entries = self._find_public_ip_entries(device_data)
+        if not public_entries:
+            return {}, {}
+
+        interfaces_by_name = self._get_interfaces_by_name(device_data)
+        interface_ip_map = self._build_interface_ip_map(device_data)
+        port_overrides: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        port_labels: Dict[str, str] = {}
+
+        for public_entry in public_entries[:3]:
+            chain = self._build_wan_chain(device_data, public_entry)
+            if not chain:
+                continue
+
+            root_port = chain[0]
+            root_interface = interfaces_by_name.get(root_port, {})
+            if not port_labels.get(root_port):
+                if len(chain) == 1:
+                    port_labels[root_port] = self._format_interface_label(
+                        root_port,
+                        root_interface,
+                        interface_ip_map.get(root_port, public_entry["address"]),
+                    )
+                else:
+                    port_labels[root_port] = self._format_interface_label(
+                        root_port,
+                        root_interface,
+                        interface_ip_map.get(root_port, ""),
+                    )
+
+            chain_interfaces = []
+            for chain_index, interface_name in enumerate(chain[1:], start=1):
+                interface_data = interfaces_by_name.get(interface_name, {})
+                address = (
+                    interface_ip_map.get(interface_name, "")
+                    or (
+                        public_entry["address"]
+                        if chain_index == len(chain) - 1
+                        else ""
+                    )
+                )
+                chain_interfaces.append({
+                    "name": interface_name,
+                    "interface_data": interface_data,
+                    "address": address,
+                })
+
+            if chain_interfaces:
+                port_overrides[root_port].append({
+                    "type": "wan_chain",
+                    "chain": chain_interfaces,
+                })
+
+        return dict(port_overrides), port_labels
+
+    def _build_device_port_labels(self) -> Dict[str, Dict[str, str]]:
+        """Build display labels for device ports including IP/MAC when known."""
+        device_port_labels = {}
+
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._get_device_label(hostname, device_data)
+            interfaces_by_name = self._get_interfaces_by_name(device_data)
+            interface_ip_map = self._build_interface_ip_map(device_data)
+            port_labels = {}
+
+            for interface_name, interface_data in interfaces_by_name.items():
+                if not self._is_physical_interface(interface_name, interface_data):
+                    continue
+                port_labels[interface_name] = self._format_interface_label(
+                    interface_name,
+                    interface_data,
+                    interface_ip_map.get(interface_name, ""),
+                )
+
+            device_port_labels[device_name] = port_labels
+
+        return device_port_labels
+        
+    def _is_public_ip(self, ip):
+        """
+        Check if an IP address is public (not private/rfc1918).
+        
+        Args:
+            ip (str): IP address to check
+            
+        Returns:
+            bool: True if public IP, False if private
+        """
+        if not ip:
+            return False
+
+        try:
+            address = ipaddress.ip_address(ip)
+            return address.is_global and not address.is_multicast
+        except ValueError:
+            return False
+    
+    def _identify_edge_routers(self):
+        """
+        Identify edge routers (devices with public IP addresses).
+        
+        Returns:
+            dict: Dictionary mapping device names to lists of public IPs
+        """
+        edge_routers = defaultdict(list)
+        
+        # Check each device's IP addresses
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        for device_ip, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+                
+            device_name = self._get_device_label(device_ip, device_data)
+            public_ips = []
+            
+            # Look through IP address information for public IPs
+            for ip_entry in device_data.get("ip_addresses", []):
+                # Get the IP address/network (format like "192.168.1.1/24")
+                address = ip_entry.get("address", "")
+                if "/" in address:
+                    ip_part = address.split("/")[0]
+                    if self._is_public_ip(ip_part):
+                        if address not in public_ips:
+                            public_ips.append(address)
+                elif "." in address:  # Just IP without CIDR
+                    if self._is_public_ip(address):
+                        if address not in public_ips:
+                            public_ips.append(address)
+            
+            # If device has public IPs, it's an edge router
+            if public_ips:
+                edge_routers[device_name] = public_ips
+        
+        logger.info(f"Identified {len(edge_routers)} edge routers")
+        return edge_routers
+        
+    def load_data(self, filename: str) -> bool:
+        """
+        Load collected device data from a JSON file.
+        
+        Args:
+            filename (str): Input file path
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            with open(filename, 'r') as f:
+                self.devices_data = json.load(f)
+            logger.info(f"Device data loaded from {filename}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load data from {filename}: {e}")
+            return False
+    
+    def build_mac_name_map(self):
+        """
+        Build comprehensive MAC-to-name mapping from multiple sources.
+        Priority: DNS > DHCP > Neighbors
+        """
+        logger.info("Building MAC-to-name mapping...")
+        self.mac_name_map = {}
+        self.device_label_map = {}
+        
+        # Temporary maps for each source
+        device_map, _ = self._build_known_device_maps()
+        dns_map = {}
+        dhcp_map = {}
+        neighbor_map = {}
+
+        dns_ip_map = {}
+
+        # Process DNS static entries into IP-to-name mappings first. RouterOS
+        # DNS static records typically provide name/address pairs, not MACs.
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            for dns_entry in device_data.get("dns_static", []):
+                ip = dns_entry.get("address", "")
+                name = dns_entry.get("name", "")
+                if ip and name:
+                    dns_ip_map[ip] = name
+
+        # Resolve DNS names to MACs through DHCP and ARP IP associations.
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            for dhcp_entry in device_data.get("dhcp_leases", []):
+                mac = dhcp_entry.get("mac_address", "").upper()
+                ip = dhcp_entry.get("active_address") or dhcp_entry.get("address", "")
+                name = self._clean_name(dns_ip_map.get(ip, ""))
+                if mac and name:
+                    dns_map[mac] = name
+
+            for arp_entry in device_data.get("arp_table", []):
+                mac = arp_entry.get("mac_address", "").upper()
+                ip = arp_entry.get("address", "")
+                name = self._clean_name(dns_ip_map.get(ip, ""))
+                if mac and name and mac not in dns_map:
+                    dns_map[mac] = name
+        
+        # Process DHCP leases (medium priority)
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+                
+            for dhcp_entry in device_data.get("dhcp_leases", []):
+                mac = dhcp_entry.get("mac_address", "").upper()
+                host_name = self._clean_name(dhcp_entry.get("host_name", ""))
+                if mac and host_name:
+                    dhcp_map[mac] = host_name
+        
+        # Process neighbors (lowest priority)
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+                
+            for neighbor in device_data.get("neighbors", []):
+                mac = neighbor.get("mac_address", "").upper()
+                identity = self._clean_name(neighbor.get("identity", ""))
+                if mac and identity:
+                    neighbor_map[mac] = identity
+        
+        # Build final map with priority
+        all_macs = set(device_map.keys()) | set(dns_map.keys()) | set(dhcp_map.keys()) | set(neighbor_map.keys())
+        
+        for mac in all_macs:
+            if mac in device_map:
+                self.mac_name_map[mac] = device_map[mac]
+            elif mac in dns_map:
+                self.mac_name_map[mac] = dns_map[mac]
+            elif mac in dhcp_map:
+                self.mac_name_map[mac] = dhcp_map[mac]
+            elif mac in neighbor_map:
+                self.mac_name_map[mac] = neighbor_map[mac]
+        
+        logger.info(f"Built MAC-to-name map with {len(self.mac_name_map)} entries")
+    
+    def build_mac_ip_map(self):
+        """Build MAC-to-IP mapping from device, DHCP, and ARP data."""
+        logger.info("Building MAC-to-IP mapping...")
+        self.mac_ip_map = {}
+        self.device_label_map = {}
+
+        _, device_ip_map = self._build_known_device_maps()
+        self.mac_ip_map.update(device_ip_map)
+        
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+                
+            for dhcp_entry in device_data.get("dhcp_leases", []):
+                mac = dhcp_entry.get("mac_address", "").upper()
+                address = dhcp_entry.get("active_address") or dhcp_entry.get("address", "")
+                if mac and address:
+                    self.mac_ip_map[mac] = address
+
+            for arp_entry in device_data.get("arp_table", []):
+                mac = arp_entry.get("mac_address", "").upper()
+                address = arp_entry.get("address", "")
+                if mac and address and mac not in self.mac_ip_map:
+                    self.mac_ip_map[mac] = address
+        
+        logger.info(f"Built MAC-to-IP map with {len(self.mac_ip_map)} entries")
+    
+    def build_ip_name_map(self):
+        """Build IP-to-name mapping from DNS static entries."""
+        logger.info("Building IP-to-name mapping...")
+        self.ip_name_map = {}
+        
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+                
+            for dns_entry in device_data.get("dns_static", []):
+                ip = dns_entry.get("address", "")
+                name = dns_entry.get("name", "")
+                if ip and name:
+                    self.ip_name_map[ip] = name
+        
+        logger.info(f"Built IP-to-name map with {len(self.ip_name_map)} entries")
+    
+    def build_mac_port_map(self):
+        """Build MAC-to-physical port mapping from bridge host entries."""
+        logger.info("Building MAC-to-port mapping...")
+        self.mac_port_map = {}
+        self.device_label_map = {}
+        
+        self._build_device_label_map()
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+                
+            device_name = self._get_device_label(hostname, device_data)
+            interfaces_by_name = self._get_interfaces_by_name(device_data)
+            
+            for bridge_host in device_data.get("bridge_hosts", []):
+                mac = bridge_host.get("mac_address", "").upper()
+                interface = bridge_host.get("interface", "")
+                if mac and interface:
+                    interface_data = interfaces_by_name.get(interface, {})
+                    if self._is_physical_interface(interface, interface_data):
+                        self.mac_port_map[mac] = {
+                            "device": device_name,
+                            "port": interface
+                        }
+        
+        logger.info(f"Built MAC-to-port map with {len(self.mac_port_map)} entries")
+    
+    def _build_device_port_endpoints(self) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        """Build per-device endpoint lists keyed by physical port."""
+        device_interface_map = self._build_known_device_interface_map()
+        managed_identity_ip_map = self._build_known_identity_ip_map()
+        local_device_mac_sets = self._build_local_device_mac_sets()
+        device_port_endpoints: Dict[str, Dict[str, Dict[Tuple[str, str], Dict[str, Any]]]] = (
+            defaultdict(lambda: defaultdict(dict))
+        )
+
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._get_device_label(hostname, device_data)
+
+            for bridge_host in device_data.get("bridge_hosts", []):
+                mac = bridge_host.get("mac_address", "").upper()
+                port = bridge_host.get("interface") or bridge_host.get("on_interface") or ""
+
+                if not mac:
+                    continue
+                if mac == "00:00:00:00:00:00":
+                    continue
+
+                port_interface = self._get_interfaces_by_name(device_data).get(
+                    self._clean_name(port),
+                    {},
+                )
+                if not self._is_physical_interface(port, port_interface):
+                    continue
+
+                if mac in local_device_mac_sets.get(device_name, set()):
+                    continue
+
+                if mac in device_interface_map:
+                    remote_interface = device_interface_map[mac]
+                    remote_name = self._clean_name(remote_interface["device"])
+                    if not remote_name or remote_name == device_name:
+                        continue
+
+                    key = ("device", remote_name)
+                    endpoint = {
+                        "type": "device",
+                        "name": remote_name,
+                        "mac": mac,
+                        "ip": managed_identity_ip_map.get(
+                            remote_name,
+                            remote_interface.get("ip", "Unknown IP"),
+                        ),
+                        "remote_port": remote_interface.get("port", ""),
+                    }
+                else:
+                    host_name = self._clean_name(self.mac_name_map.get(mac, ""))
+                    host_ip = self.mac_ip_map.get(mac, "Unknown IP")
+                    display_name = host_name or host_ip or mac
+                    key = ("host", mac)
+                    endpoint = {
+                        "type": "host",
+                        "name": display_name,
+                        "mac": mac,
+                        "ip": host_ip,
+                    }
+
+                device_port_endpoints[device_name][port][key] = endpoint
+
+        normalized_endpoints = {}
+        for device_name, port_map in device_port_endpoints.items():
+            normalized_endpoints[device_name] = {}
+            for port, endpoints in port_map.items():
+                normalized_endpoints[device_name][port] = sorted(
+                    endpoints.values(),
+                    key=lambda endpoint: (
+                        endpoint["type"] != "device",
+                        endpoint["name"].lower(),
+                        endpoint["mac"],
+                    ),
+                )
+
+        return normalized_endpoints
+
+    def _reduce_port_endpoints(
+        self,
+        endpoints: List[Dict[str, Any]],
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+    ) -> List[Dict[str, Any]]:
+        """Reduce shared-segment endpoints to direct children plus unexplained hosts."""
+        device_endpoints = [endpoint for endpoint in endpoints if endpoint["type"] == "device"]
+        if not device_endpoints:
+            return endpoints
+
+        explained_by = defaultdict(set)
+        reachable_hosts = {}
+
+        for endpoint in device_endpoints:
+            remote_name = endpoint["name"]
+            upstream_port = endpoint.get("remote_port", "")
+            child_devices = set()
+            child_host_macs = set()
+
+            for port, child_endpoints in device_port_endpoints.get(remote_name, {}).items():
+                if upstream_port and port == upstream_port:
+                    continue
+                for child_endpoint in child_endpoints:
+                    if child_endpoint["type"] == "device":
+                        child_devices.add(child_endpoint["name"])
+                    else:
+                        child_host_macs.add(child_endpoint["mac"])
+
+            for child_name in child_devices:
+                explained_by[child_name].add(remote_name)
+            reachable_hosts[remote_name] = child_host_macs
+
+        if len(device_endpoints) == 1:
+            direct_device_names = {device_endpoints[0]["name"]}
+        else:
+            direct_device_names = {
+                endpoint["name"]
+                for endpoint in device_endpoints
+                if endpoint["name"] not in explained_by
+            }
+            if not direct_device_names:
+                direct_device_names = {endpoint["name"] for endpoint in device_endpoints}
+
+        explained_host_macs = set()
+        for device_name in direct_device_names:
+            explained_host_macs.update(reachable_hosts.get(device_name, set()))
+
+        reduced_endpoints = []
+        for endpoint in endpoints:
+            if endpoint["type"] == "device" and endpoint["name"] in direct_device_names:
+                reduced_endpoints.append(endpoint)
+            elif endpoint["type"] == "host" and endpoint["mac"] not in explained_host_macs:
+                reduced_endpoints.append(endpoint)
+
+        return reduced_endpoints or endpoints
+
+    def _find_upstream_port(
+        self,
+        device_name: str,
+        parent_name: str,
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+    ) -> str:
+        """Return the local port on device_name that faces parent_name."""
+        for port in sorted(device_port_endpoints.get(device_name, {})):
+            endpoints = device_port_endpoints[device_name][port]
+            for endpoint in endpoints:
+                if endpoint["type"] == "device" and endpoint["name"] == parent_name:
+                    return port
+        return ""
+
+    def _get_display_remote_port(self, endpoint: Dict[str, Any]) -> str:
+        """Return the explicit remote port label when it is physical."""
+        remote_port = endpoint.get("remote_port", "")
+        if self._is_physical_interface(remote_port):
+            return remote_port
+        return ""
+
+    def _resolve_display_remote_port(
+        self,
+        endpoint: Dict[str, Any],
+        parent_name: str,
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+    ) -> str:
+        """Return the best physical remote port label for display."""
+        remote_port = self._get_display_remote_port(endpoint)
+        if remote_port:
+            return remote_port
+
+        reciprocal_port = self._find_upstream_port(
+            endpoint["name"],
+            parent_name,
+            device_port_endpoints,
+        )
+        if self._is_physical_interface(reciprocal_port):
+            return reciprocal_port
+
+        return ""
+
+    def _resolve_child_upstream_port(
+        self,
+        endpoint: Dict[str, Any],
+        parent_name: str,
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+    ) -> str:
+        """Pick the child port that faces the parent for subtree suppression."""
+        remote_port = endpoint.get("remote_port", "")
+        if self._is_physical_interface(remote_port):
+            return remote_port
+
+        reciprocal_port = self._find_upstream_port(
+            endpoint["name"],
+            parent_name,
+            device_port_endpoints,
+        )
+        if reciprocal_port:
+            return reciprocal_port
+
+        return remote_port
+
+    def _format_endpoint_label(self, endpoint: Dict[str, Any], remote_port: str = "") -> str:
+        """Format a device or host endpoint for topology output."""
+        label = endpoint["name"]
+        ip = endpoint.get("ip", "")
+        mac = endpoint["mac"]
+
+        if endpoint["type"] == "device":
+            if remote_port:
+                label = f"<{remote_port}> {label}"
+            if ip and ip != "Unknown IP":
+                return f"{self._format_managed_device_label(label, ip)} [{mac}]"
+            return f"{label} [{mac}]"
+
+        if ip and ip != "Unknown IP" and ip != label:
+            return f"{label} ({ip}) [{mac}]"
+        return f"{label} [{mac}]"
+
+    def _format_managed_device_label(self, device_name: str, ip: str) -> str:
+        """Format a managed device label without duplicating an embedded IP."""
+        if ip and ip != "Unknown IP" and not device_name.endswith(f" ({ip})"):
+            return f"{device_name} ({ip})"
+        return device_name
+
+    def _get_child_prefix(self, endpoint_prefix: str, remote_port: str = "") -> str:
+        """Align nested child-device ports with the child device name."""
+        base_padding = " " * 3
+        remote_padding = f"<{remote_port}> " if remote_port else ""
+        return endpoint_prefix + base_padding + (" " * len(remote_padding))
+
+    def _build_host_candidates(self) -> Dict[str, Dict[str, Any]]:
+        """Build host records from collected data for unresolved-node output."""
+        managed_macs = set()
+        for macs in self._build_local_device_mac_sets().values():
+            managed_macs.update(macs)
+
+        candidates: Dict[str, Dict[str, Any]] = {}
+
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._get_device_label(hostname, device_data)
+
+            for bridge_host in device_data.get("bridge_hosts", []):
+                mac = (bridge_host.get("mac_address") or "").upper()
+                port = self._clean_name(
+                    bridge_host.get("interface") or bridge_host.get("on_interface") or ""
+                )
+                if not mac or mac == "00:00:00:00:00:00" or mac in managed_macs:
+                    continue
+
+                host = candidates.setdefault(mac, {
+                    "name": self._clean_name(self.mac_name_map.get(mac, "")),
+                    "ip": self.mac_ip_map.get(mac, ""),
+                    "seen_on": set(),
+                    "sources": set(),
+                })
+                if port:
+                    host["seen_on"].add(f"{device_name}/{port}")
+                host["sources"].add(f"{device_name}:bridge")
+
+            for dhcp_entry in device_data.get("dhcp_leases", []):
+                mac = (dhcp_entry.get("mac_address") or "").upper()
+                if not mac or mac == "00:00:00:00:00:00" or mac in managed_macs:
+                    continue
+
+                host = candidates.setdefault(mac, {
+                    "name": "",
+                    "ip": "",
+                    "seen_on": set(),
+                    "sources": set(),
+                })
+                host_name = self._clean_name(dhcp_entry.get("host_name", ""))
+                host_ip = dhcp_entry.get("active_address") or dhcp_entry.get("address", "")
+                if host_name:
+                    host["name"] = host_name
+                if host_ip:
+                    host["ip"] = host_ip
+                host["sources"].add(f"{device_name}:dhcp")
+
+            for arp_entry in device_data.get("arp_table", []):
+                mac = (arp_entry.get("mac_address") or "").upper()
+                if not mac or mac == "00:00:00:00:00:00" or mac in managed_macs:
+                    continue
+
+                host = candidates.setdefault(mac, {
+                    "name": "",
+                    "ip": "",
+                    "seen_on": set(),
+                    "sources": set(),
+                })
+                host_ip = arp_entry.get("address", "")
+                if host_ip and not host["ip"]:
+                    host["ip"] = host_ip
+                host["sources"].add(f"{device_name}:arp")
+
+        for mac, host in candidates.items():
+            if not host["name"]:
+                host["name"] = self._clean_name(self.mac_name_map.get(mac, ""))
+            if not host["ip"]:
+                host["ip"] = self.mac_ip_map.get(mac, "")
+
+        return candidates
+
+    def _format_unresolved_host_label(self, mac: str, host: Dict[str, Any]) -> str:
+        """Format one unresolved host line."""
+        name = host.get("name", "")
+        ip = host.get("ip", "")
+        if name and ip and name != ip:
+            return f"{name} ({ip}) [{mac}]"
+        if ip:
+            return f"{ip} [{mac}]"
+        if name:
+            return f"{name} [{mac}]"
+        return f"{mac}"
+
+    def _safe_model_id_part(self, value: str) -> str:
+        """Normalize one topology model ID component."""
+        normalized = re.sub(r"[^a-z0-9_.-]+", "-", (value or "").strip().lower())
+        normalized = normalized.strip("-")
+        return normalized or "unknown"
+
+    def _make_model_id(self, kind: str, *parts: str) -> str:
+        """Build a stable topology model node ID."""
+        safe_parts = [self._safe_model_id_part(part) for part in parts if part]
+        suffix = ":".join(safe_parts) if safe_parts else "unknown"
+        return f"{kind}:{suffix}"
+
+    def _get_device_primary_mac(self, device_data: Dict[str, Any]) -> str:
+        """Return the first non-zero interface MAC for a managed device."""
+        for interface in device_data.get("interfaces", []):
+            mac = self._get_interface_mac(interface)
+            if mac and mac != "00:00:00:00:00:00":
+                return mac
+        return ""
+
+    def _register_model_node(
+        self,
+        nodes_by_id: Dict[str, Dict[str, Any]],
+        node_id: str,
+        payload: Dict[str, Any],
+    ) -> str:
+        """Insert or update one topology model node."""
+        existing = nodes_by_id.get(node_id, {})
+        merged = dict(existing)
+        merged.update({key: value for key, value in payload.items() if value not in (None, "")})
+        merged["id"] = node_id
+        nodes_by_id[node_id] = merged
+        return node_id
+
+    def _register_model_edge(
+        self,
+        edges_by_key: Dict[Tuple[str, str, str, str], Dict[str, Any]],
+        from_id: str,
+        to_id: str,
+        kind: str,
+        **payload: Any,
+    ):
+        """Insert or update one topology model edge."""
+        edge_key = (
+            from_id,
+            to_id,
+            kind,
+            str(payload.get("remote_interface") or ""),
+        )
+        edge = edges_by_key.get(edge_key, {"from": from_id, "to": to_id, "kind": kind})
+        for key, value in payload.items():
+            if value not in (None, "", [], {}):
+                edge[key] = value
+        edges_by_key[edge_key] = edge
+
+    def _build_device_node(
+        self,
+        device_name: str,
+        device_ip: str,
+        connected_device_data: Dict[str, Dict[str, Any]],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+    ) -> str:
+        """Register and return one managed-device node."""
+        device_data = connected_device_data.get(device_name, {})
+        node_id = self._make_model_id("device", device_name)
+        self._register_model_node(
+            nodes_by_id,
+            node_id,
+            {
+                "kind": "device",
+                "type": "mikrotik",
+                "label": device_name,
+                "ip": device_ip if device_ip != "Unknown IP" else "",
+                "mac": self._get_device_primary_mac(device_data),
+                "hostname": device_data.get("hostname", ""),
+            },
+        )
+        return node_id
+
+    def _build_interface_node(
+        self,
+        device_name: str,
+        interface_name: str,
+        label: str,
+        interface_data: Dict[str, Any],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+    ) -> str:
+        """Register and return one interface node."""
+        interface_type = self._normalize_interface_type(interface_data)
+        node_id = self._make_model_id("interface", device_name, interface_name)
+        self._register_model_node(
+            nodes_by_id,
+            node_id,
+            {
+                "kind": "interface",
+                "type": interface_type or "unknown",
+                "label": label,
+                "name": interface_name,
+                "device": device_name,
+                "ip": "",
+                "mac": self._get_interface_mac(interface_data),
+                "running": interface_data.get("running", ""),
+            },
+        )
+        return node_id
+
+    def _build_host_node(
+        self,
+        endpoint: Dict[str, Any],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+    ) -> str:
+        """Register and return one host node."""
+        node_id = self._make_model_id("host", endpoint["mac"])
+        self._register_model_node(
+            nodes_by_id,
+            node_id,
+            {
+                "kind": "host",
+                "type": "host",
+                "label": endpoint["name"],
+                "ip": endpoint.get("ip", "") if endpoint.get("ip") != "Unknown IP" else "",
+                "mac": endpoint["mac"],
+            },
+        )
+        return node_id
+
+    def _build_tree_interface_item(
+        self,
+        device_name: str,
+        interface_name: str,
+        label: str,
+        interface_data: Dict[str, Any],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Create one interface tree item."""
+        node_id = self._build_interface_node(
+            device_name,
+            interface_name,
+            label,
+            interface_data,
+            nodes_by_id,
+        )
+        if interface_data:
+            interface_ip_match = re.search(r"\(([^)]+)\)", label)
+            self._register_model_node(
+                nodes_by_id,
+                node_id,
+                {
+                    "ip": interface_ip_match.group(1) if interface_ip_match else "",
+                },
+            )
+        return {"node_id": node_id, "kind": "interface", "children": []}
+
+    def _build_topology_model_tree(
+        self,
+        device_name: str,
+        connected_device_data: Dict[str, Dict[str, Any]],
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+        visited_devices: Set[str],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+        edges_by_key: Dict[Tuple[str, str, str, str], Dict[str, Any]],
+        rendered_host_macs: Set[str],
+        upstream_port: str = "",
+        port_overrides: Dict[str, List[Dict[str, Any]]] = None,
+        port_labels: Dict[str, str] = None,
+        device_port_labels: Dict[str, Dict[str, str]] = None,
+        standalone_ports: Dict[str, Set[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Build recursive tree items for one managed device."""
+        port_overrides = port_overrides or {}
+        port_labels = port_labels or {}
+        device_port_labels = device_port_labels or {}
+        standalone_ports = standalone_ports or {}
+
+        device_data = connected_device_data.get(device_name, {})
+        interfaces_by_name = self._get_interfaces_by_name(device_data)
+        ports = [
+            port
+            for port in sorted(
+                set(device_port_endpoints.get(device_name, {}))
+                | set(port_overrides)
+                | set(standalone_ports.get(device_name, set()))
+            )
+            if port != upstream_port
+        ]
+
+        device_node_id = self._make_model_id("device", device_name)
+        tree_items = []
+
+        for port in ports:
+            interface_data = interfaces_by_name.get(port, {})
+            display_port = (
+                port_labels.get(port)
+                or device_port_labels.get(device_name, {}).get(port)
+                or port
+            )
+            interface_item = self._build_tree_interface_item(
+                device_name,
+                port,
+                display_port,
+                interface_data,
+                nodes_by_id,
+            )
+            self._register_model_edge(
+                edges_by_key,
+                device_node_id,
+                interface_item["node_id"],
+                "contains",
+            )
+
+            endpoints = port_overrides.get(
+                port,
+                device_port_endpoints.get(device_name, {}).get(port, []),
+            )
+            endpoints = self._reduce_port_endpoints(endpoints, device_port_endpoints)
+            device_count = sum(1 for endpoint in endpoints if endpoint["type"] == "device")
+            host_count = sum(1 for endpoint in endpoints if endpoint["type"] == "host")
+            shared_segment = device_count > 1 or (device_count >= 1 and host_count >= 1)
+
+            endpoint_parent = interface_item
+            endpoint_parent_id = interface_item["node_id"]
+            if shared_segment:
+                segment_id = self._make_model_id("segment", device_name, port, "shared")
+                self._register_model_node(
+                    nodes_by_id,
+                    segment_id,
+                    {
+                        "kind": "segment",
+                        "type": "shared",
+                        "label": "[shared segment]",
+                        "device": device_name,
+                        "port": port,
+                    },
+                )
+                self._register_model_edge(
+                    edges_by_key,
+                    interface_item["node_id"],
+                    segment_id,
+                    "contains",
+                )
+                segment_item = {"node_id": segment_id, "kind": "segment", "children": []}
+                interface_item["children"].append(segment_item)
+                endpoint_parent = segment_item
+                endpoint_parent_id = segment_id
+
+            for endpoint in endpoints:
+                if endpoint["type"] == "wan_chain":
+                    chain_parent = endpoint_parent
+                    chain_parent_id = endpoint_parent_id
+                    for chain_entry in endpoint.get("chain", []):
+                        chain_item = self._build_tree_interface_item(
+                            device_name,
+                            chain_entry["name"],
+                            self._format_interface_label(
+                                chain_entry["name"],
+                                chain_entry.get("interface_data", {}),
+                                chain_entry.get("address", ""),
+                            ),
+                            chain_entry.get("interface_data", {}),
+                            nodes_by_id,
+                        )
+                        self._register_model_edge(
+                            edges_by_key,
+                            chain_parent_id,
+                            chain_item["node_id"],
+                            "contains",
+                        )
+                        chain_parent["children"].append(chain_item)
+                        chain_parent = chain_item
+                        chain_parent_id = chain_item["node_id"]
+                    continue
+
+                if endpoint["type"] == "device":
+                    remote_ip = endpoint.get("ip", "")
+                    device_id = self._build_device_node(
+                        endpoint["name"],
+                        remote_ip,
+                        connected_device_data,
+                        nodes_by_id,
+                    )
+                    remote_port = self._resolve_display_remote_port(
+                        endpoint,
+                        device_name,
+                        device_port_endpoints,
+                    )
+                    child_item = {
+                        "node_id": device_id,
+                        "kind": "device",
+                        "children": [],
+                        "remote_interface": remote_port,
+                        "display_mac": endpoint["mac"],
+                        "already_shown": endpoint["name"] in visited_devices,
+                    }
+                    self._register_model_edge(
+                        edges_by_key,
+                        endpoint_parent_id,
+                        device_id,
+                        "links_to",
+                        remote_interface=remote_port,
+                    )
+                    endpoint_parent["children"].append(child_item)
+
+                    if child_item["already_shown"]:
+                        continue
+
+                    visited_devices.add(endpoint["name"])
+                    child_upstream_port = self._resolve_child_upstream_port(
+                        endpoint,
+                        device_name,
+                        device_port_endpoints,
+                    )
+                    child_item["children"] = self._build_topology_model_tree(
+                        endpoint["name"],
+                        connected_device_data,
+                        device_port_endpoints,
+                        visited_devices,
+                        nodes_by_id,
+                        edges_by_key,
+                        rendered_host_macs,
+                        upstream_port=child_upstream_port,
+                        device_port_labels=device_port_labels,
+                        standalone_ports=standalone_ports,
+                    )
+                    continue
+
+                host_id = self._build_host_node(endpoint, nodes_by_id)
+                rendered_host_macs.add(endpoint["mac"])
+                self._register_model_edge(
+                    edges_by_key,
+                    endpoint_parent_id,
+                    host_id,
+                    "links_to",
+                )
+                endpoint_parent["children"].append({
+                    "node_id": host_id,
+                    "kind": "host",
+                    "children": [],
+                })
+
+            tree_items.append(interface_item)
+
+        return tree_items
+
+    def build_topology_model(self) -> Dict[str, Any]:
+        """Build the canonical structured topology model."""
+        logger.info("Building structured topology model...")
+        self._build_device_label_map()
+        device_port_endpoints = self._build_device_port_endpoints()
+        device_port_labels = self._build_device_port_labels()
+        standalone_ports = self._build_device_standalone_ports()
+        managed_identity_ip_map = self._build_known_identity_ip_map()
+        edge_routers = self._identify_edge_routers()
+        connected_device_data = {
+            self._get_device_label(hostname, device_data): device_data
+            for hostname, device_data in self.devices_data.items()
+            if device_data.get("connected", False)
+        }
+        connected_devices = sorted(connected_device_data)
+        root_devices = sorted(edge_routers.keys()) or connected_devices[:1]
+        remaining_devices = [
+            device_name for device_name in connected_devices
+            if device_name not in root_devices
+        ]
+
+        nodes_by_id: Dict[str, Dict[str, Any]] = {}
+        edges_by_key: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+        rendered_host_macs: Set[str] = set()
+        globally_rendered: Set[str] = set()
+        roots = []
+
+        for root_device in root_devices:
+            if root_device in globally_rendered:
+                continue
+
+            root_ip = managed_identity_ip_map.get(root_device, "Unknown IP")
+            root_node_id = self._build_device_node(
+                root_device,
+                root_ip,
+                connected_device_data,
+                nodes_by_id,
+            )
+            root_device_data = connected_device_data.get(root_device, {})
+            port_overrides, port_labels = self._build_wan_port_overrides(root_device_data)
+            visited_devices = {root_device}
+            roots.append({
+                "node_id": root_node_id,
+                "kind": "device",
+                "children": self._build_topology_model_tree(
+                    root_device,
+                    connected_device_data,
+                    device_port_endpoints,
+                    visited_devices,
+                    nodes_by_id,
+                    edges_by_key,
+                    rendered_host_macs,
+                    port_overrides=port_overrides,
+                    port_labels=port_labels,
+                    device_port_labels=device_port_labels,
+                    standalone_ports=standalone_ports,
+                ),
+            })
+            globally_rendered.update(visited_devices)
+
+        unreached_roots = []
+        for device_name in remaining_devices:
+            if device_name in globally_rendered:
+                continue
+
+            device_ip = managed_identity_ip_map.get(device_name, "Unknown IP")
+            device_node_id = self._build_device_node(
+                device_name,
+                device_ip,
+                connected_device_data,
+                nodes_by_id,
+            )
+            unreached_roots.append({
+                "node_id": device_node_id,
+                "kind": "device",
+                "children": self._build_topology_model_tree(
+                    device_name,
+                    connected_device_data,
+                    device_port_endpoints,
+                    {device_name},
+                    nodes_by_id,
+                    edges_by_key,
+                    rendered_host_macs,
+                    device_port_labels=device_port_labels,
+                    standalone_ports=standalone_ports,
+                ),
+            })
+
+        host_candidates = self._build_host_candidates()
+        unresolved_hosts = []
+        for mac, host in sorted(
+            (
+                (mac, host)
+                for mac, host in host_candidates.items()
+                if mac not in rendered_host_macs
+            ),
+            key=lambda item: (
+                (item[1].get("name") or item[1].get("ip") or item[0]).lower(),
+                item[0],
+            ),
+        ):
+            node_id = self._make_model_id("host", mac)
+            self._register_model_node(
+                nodes_by_id,
+                node_id,
+                {
+                    "kind": "host",
+                    "type": "host",
+                    "label": host.get("name") or host.get("ip") or mac,
+                    "ip": host.get("ip", ""),
+                    "mac": mac,
+                },
+            )
+            unresolved_hosts.append({
+                "node_id": node_id,
+                "kind": "host",
+                "label": self._format_unresolved_host_label(mac, host),
+                "seen_on": sorted(host.get("seen_on", set())),
+                "sources": sorted(host.get("sources", set())),
+            })
+
+        return {
+            "version": 1,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "root_ids": [item["node_id"] for item in roots],
+            "roots": roots,
+            "unreached_roots": unreached_roots,
+            "unresolved_hosts": unresolved_hosts,
+            "nodes": sorted(nodes_by_id.values(), key=lambda node: (node["kind"], node["id"])),
+            "edges": sorted(
+                edges_by_key.values(),
+                key=lambda edge: (edge["from"], edge["to"], edge["kind"]),
+            ),
+        }
+
+    def _format_model_tree_label(
+        self,
+        item: Dict[str, Any],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+    ) -> str:
+        """Format one tree-item line from the structured model."""
+        node = nodes_by_id[item["node_id"]]
+        if node["kind"] == "segment":
+            return node["label"]
+        if node["kind"] == "interface":
+            return node["label"]
+        if node["kind"] == "device":
+            label = node["label"]
+            remote_interface = item.get("remote_interface", "")
+            if remote_interface:
+                label = f"<{remote_interface}> {label}"
+            if node.get("ip"):
+                label = self._format_managed_device_label(label, node["ip"])
+            display_mac = item.get("display_mac") or node.get("mac")
+            if display_mac:
+                label += f" [{display_mac}]"
+            if item.get("already_shown"):
+                label += " [already shown]"
+            return label
+        if node["kind"] == "host":
+            if node.get("ip") and node["ip"] != node["label"]:
+                return f"{node['label']} ({node['ip']}) [{node['mac']}]"
+            if node.get("mac"):
+                return f"{node['label']} [{node['mac']}]"
+        return node.get("label", item["node_id"])
+
+    def _get_model_child_prefix(
+        self,
+        item: Dict[str, Any],
+        child_prefix: str,
+    ) -> str:
+        """Return the child prefix for nested rendering from the model."""
+        if item.get("kind") != "device":
+            return child_prefix
+        remote_padding = f"<{item.get('remote_interface')}> " if item.get("remote_interface") else ""
+        return child_prefix + (" " * 3) + (" " * len(remote_padding))
+
+    def _render_model_tree_items(
+        self,
+        items: List[Dict[str, Any]],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+        prefix: str = "",
+    ) -> List[str]:
+        """Render recursive tree items from the structured model."""
+        lines = []
+        for index, item in enumerate(items):
+            connector = "└─" if index == len(items) - 1 else "├─"
+            child_prefix = prefix + ("   " if index == len(items) - 1 else "│  ")
+            lines.append(
+                f"{prefix}{connector} {self._format_model_tree_label(item, nodes_by_id)}"
+            )
+            if item.get("children"):
+                nested_prefix = self._get_model_child_prefix(item, child_prefix)
+                lines.extend(
+                    self._render_model_tree_items(
+                        item["children"],
+                        nodes_by_id,
+                        prefix=nested_prefix,
+                    )
+                )
+        return lines
+
+    def render_topology_model_text(self, topology_model: Dict[str, Any]) -> List[str]:
+        """Render text topology from the canonical structured model."""
+        nodes_by_id = {node["id"]: node for node in topology_model.get("nodes", [])}
+        lines = ["NETWORK TOPOLOGY", "================", ""]
+
+        for root_item in topology_model.get("roots", []):
+            root_node = nodes_by_id[root_item["node_id"]]
+            header = self._format_managed_device_label(
+                root_node["label"],
+                root_node.get("ip", "") or "Unknown IP",
+            )
+            lines.append(header)
+            if root_item.get("children"):
+                lines.extend(
+                    self._render_model_tree_items(
+                        root_item["children"],
+                        nodes_by_id,
+                    )
+                )
+            else:
+                lines.append("└─ no port data")
+            lines.append("")
+
+        if topology_model.get("unreached_roots"):
+            lines.append("UNREACHED MANAGED DEVICES")
+            lines.append("------------------------")
+            for root_item in topology_model["unreached_roots"]:
+                root_node = nodes_by_id[root_item["node_id"]]
+                lines.append(
+                    self._format_managed_device_label(
+                        root_node["label"],
+                        root_node.get("ip", "") or "Unknown IP",
+                    )
+                )
+                if root_item.get("children"):
+                    lines.extend(
+                        self._render_model_tree_items(
+                            root_item["children"],
+                            nodes_by_id,
+                        )
+                    )
+                else:
+                    lines.append("└─ no port data")
+                lines.append("")
+
+        if topology_model.get("unresolved_hosts"):
+            lines.append("UNRESOLVED HOSTS")
+            lines.append("----------------")
+            for host in topology_model["unresolved_hosts"]:
+                lines.append(host["label"])
+                if host.get("seen_on"):
+                    lines.append(f"  seen on: {', '.join(host['seen_on'])}")
+            lines.append("")
+
+        return lines
+
+    def save_topology_model(
+        self,
+        output_file: str,
+        topology_model: Dict[str, Any],
+    ) -> bool:
+        """Save the structured topology model to JSON."""
+        try:
+            output_dir = os.path.dirname(output_file)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            with open(output_file, "w") as handle:
+                json.dump(topology_model, handle, indent=2)
+            logger.info(f"Topology model saved to {output_file}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save topology model to {output_file}: {e}")
+            return False
+
+    def _render_device_tree(
+        self,
+        device_name: str,
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+        visited_devices: Set[str],
+        rendered_host_macs: Set[str] = None,
+        upstream_port: str = "",
+        prefix: str = "",
+        port_overrides: Dict[str, List[Dict[str, Any]]] = None,
+        port_labels: Dict[str, str] = None,
+        device_port_labels: Dict[str, Dict[str, str]] = None,
+        standalone_ports: Dict[str, Set[str]] = None,
+    ) -> List[str]:
+        """Render a recursive per-port tree for one managed device."""
+        lines = []
+        port_overrides = port_overrides or {}
+        port_labels = port_labels or {}
+        device_port_labels = device_port_labels or {}
+        standalone_ports = standalone_ports or {}
+        rendered_host_macs = rendered_host_macs if rendered_host_macs is not None else set()
+        ports = [
+            port
+            for port in sorted(
+                set(device_port_endpoints.get(device_name, {}))
+                | set(port_overrides)
+                | set(standalone_ports.get(device_name, set()))
+            )
+            if port != upstream_port
+        ]
+
+        for port_index, port in enumerate(ports):
+            port_connector = "└─" if port_index == len(ports) - 1 else "├─"
+            port_prefix = prefix + ("   " if port_index == len(ports) - 1 else "│  ")
+            display_port = (
+                port_labels.get(port)
+                or device_port_labels.get(device_name, {}).get(port)
+                or port
+            )
+            lines.append(f"{prefix}{port_connector} {display_port}")
+
+            endpoints = port_overrides.get(
+                port,
+                device_port_endpoints.get(device_name, {}).get(port, []),
+            )
+            endpoints = self._reduce_port_endpoints(endpoints, device_port_endpoints)
+            device_count = sum(1 for endpoint in endpoints if endpoint["type"] == "device")
+            host_count = sum(1 for endpoint in endpoints if endpoint["type"] == "host")
+            shared_segment = device_count > 1 or (device_count >= 1 and host_count >= 1)
+
+            if shared_segment:
+                lines.append(f"{port_prefix}└─ [shared segment]")
+                endpoint_prefix_base = f"{port_prefix}   "
+            else:
+                endpoint_prefix_base = port_prefix
+
+            for endpoint_index, endpoint in enumerate(endpoints):
+                endpoint_connector = "└─" if endpoint_index == len(endpoints) - 1 else "├─"
+                endpoint_prefix = endpoint_prefix_base + (
+                    "   " if endpoint_index == len(endpoints) - 1 else "│  "
+                )
+
+                if endpoint["type"] == "wan_chain":
+                    chain_labels = endpoint.get("chain_labels", [])
+                    if not chain_labels:
+                        continue
+
+                    lines.append(
+                        f"{endpoint_prefix_base}{endpoint_connector} {chain_labels[0]}"
+                    )
+                    chain_prefix = endpoint_prefix
+                    for chain_label in chain_labels[1:]:
+                        lines.append(f"{chain_prefix}└─ {chain_label}")
+                        chain_prefix += "   "
+                    continue
+
+                if endpoint["type"] == "device":
+                    child_name = endpoint["name"]
+                    display_remote_port = self._resolve_display_remote_port(
+                        endpoint,
+                        device_name,
+                        device_port_endpoints,
+                    )
+                    if child_name in visited_devices:
+                        lines.append(
+                            f"{endpoint_prefix_base}{endpoint_connector} "
+                            f"{self._format_endpoint_label(endpoint, display_remote_port)} "
+                            "[already shown]"
+                        )
+                        continue
+
+                    lines.append(
+                        f"{endpoint_prefix_base}{endpoint_connector} "
+                        f"{self._format_endpoint_label(endpoint, display_remote_port)}"
+                    )
+                    visited_devices.add(child_name)
+                    child_upstream_port = self._resolve_child_upstream_port(
+                        endpoint,
+                        device_name,
+                        device_port_endpoints,
+                    )
+                    child_prefix = self._get_child_prefix(
+                        endpoint_prefix,
+                        display_remote_port,
+                    )
+                    child_lines = self._render_device_tree(
+                        child_name,
+                        device_port_endpoints,
+                        visited_devices,
+                        rendered_host_macs=rendered_host_macs,
+                        upstream_port=child_upstream_port,
+                        prefix=child_prefix,
+                        device_port_labels=device_port_labels,
+                        standalone_ports=standalone_ports,
+                    )
+                    if child_lines:
+                        lines.extend(child_lines)
+                    else:
+                        lines.append(f"{child_prefix}└─ no downstream endpoints")
+                    continue
+
+                rendered_host_macs.add(endpoint["mac"])
+                lines.append(
+                    f"{endpoint_prefix_base}{endpoint_connector} "
+                    f"{self._format_endpoint_label(endpoint)}"
+                )
+
+        return lines
+
+    def generate_topology_output(
+        self,
+        output_file: str = "data/topology.txt",
+        topology_model: Dict[str, Any] | None = None,
+    ) -> bool:
+        """
+        Generate the final rooted topology tree.
+        
+        Args:
+            output_file (str): Output file path
+            topology_model (dict, optional): Prebuilt topology model
+        """
+        logger.info("Generating topology output...")
+        topology_model = topology_model or self.build_topology_model()
+        lines = self.render_topology_model_text(topology_model)
+
+        # Write to file
+        try:
+            output_dir = os.path.dirname(output_file)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            with open(output_file, 'w') as f:
+                f.write('\n'.join(lines))
+            logger.info(f"Topology output saved to {output_file}")
+            print(f"Topology saved to: {output_file}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save topology output to {output_file}: {e}")
+            return False
+    
+    def build_complete_topology(
+        self,
+        data_file: str,
+        output_file: str = "data/topology.txt",
+        json_output_file: str | None = "data/topology_graph.json",
+    ):
+        """
+        Execute the complete topology building process.
+        
+        Args:
+            data_file (str): Input data file
+            output_file (str): Output file for topology
+            json_output_file (str | None): Output file for structured topology JSON
+        """
+        # Load data
+        if not self.load_data(data_file):
+            return False
+        
+        # Build mapping tables
+        self.build_mac_name_map()
+        self.build_mac_ip_map()
+        self.build_ip_name_map()
+        self.build_mac_port_map()
+
+        topology_model = self.build_topology_model()
+
+        if json_output_file and not self.save_topology_model(json_output_file, topology_model):
+            return False
+
+        return self.generate_topology_output(output_file, topology_model=topology_model)
+
+def main():
+    """Example usage of the TopologyBuilder."""
+    import argparse
+    import sys
+    
+    parser = argparse.ArgumentParser(description="Build network topology from collected MikroTik data")
+    parser.add_argument("input_file", help="JSON file with collected device data")
+    parser.add_argument("-o", "--output", default="data/topology.txt", help="Output file for topology")
+    
+    args = parser.parse_args()
+    
+    # Create topology builder
+    builder = TopologyBuilder()
+    
+    # Build topology
+    if builder.build_complete_topology(args.input_file, args.output):
+        print(f"Successfully built topology in {args.output}")
+    else:
+        print("Failed to build topology")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
