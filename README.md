@@ -3,6 +3,9 @@
 A tool for discovering MikroTik devices, collecting live RouterOS data,
 and generating a connection map plus a rooted topology tree.
 
+See [CHANGELOG.md](/home/kitsok/home/mikroscan/CHANGELOG.md) for major
+project changes.
+
 ## Features
 
 - Discover MikroTik devices on a subnet
