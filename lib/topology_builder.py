@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from typing import Dict, List, Set, Tuple, Any
 from collections import defaultdict
 
@@ -546,7 +547,7 @@ class TopologyBuilder:
                         interface_ip_map.get(root_port, ""),
                     )
 
-            chain_labels = []
+            chain_interfaces = []
             for chain_index, interface_name in enumerate(chain[1:], start=1):
                 interface_data = interfaces_by_name.get(interface_name, {})
                 address = (
@@ -557,18 +558,16 @@ class TopologyBuilder:
                         else ""
                     )
                 )
-                chain_labels.append(
-                    self._format_interface_label(
-                        interface_name,
-                        interface_data,
-                        address=address,
-                    )
-                )
+                chain_interfaces.append({
+                    "name": interface_name,
+                    "interface_data": interface_data,
+                    "address": address,
+                })
 
-            if chain_labels:
+            if chain_interfaces:
                 port_overrides[root_port].append({
                     "type": "wan_chain",
-                    "chain_labels": chain_labels,
+                    "chain": chain_interfaces,
                 })
 
         return dict(port_overrides), port_labels
@@ -1159,6 +1158,625 @@ class TopologyBuilder:
             return f"{name} [{mac}]"
         return f"{mac}"
 
+    def _safe_model_id_part(self, value: str) -> str:
+        """Normalize one topology model ID component."""
+        normalized = re.sub(r"[^a-z0-9_.-]+", "-", (value or "").strip().lower())
+        normalized = normalized.strip("-")
+        return normalized or "unknown"
+
+    def _make_model_id(self, kind: str, *parts: str) -> str:
+        """Build a stable topology model node ID."""
+        safe_parts = [self._safe_model_id_part(part) for part in parts if part]
+        suffix = ":".join(safe_parts) if safe_parts else "unknown"
+        return f"{kind}:{suffix}"
+
+    def _get_device_primary_mac(self, device_data: Dict[str, Any]) -> str:
+        """Return the first non-zero interface MAC for a managed device."""
+        for interface in device_data.get("interfaces", []):
+            mac = self._get_interface_mac(interface)
+            if mac and mac != "00:00:00:00:00:00":
+                return mac
+        return ""
+
+    def _register_model_node(
+        self,
+        nodes_by_id: Dict[str, Dict[str, Any]],
+        node_id: str,
+        payload: Dict[str, Any],
+    ) -> str:
+        """Insert or update one topology model node."""
+        existing = nodes_by_id.get(node_id, {})
+        merged = dict(existing)
+        merged.update({key: value for key, value in payload.items() if value not in (None, "")})
+        merged["id"] = node_id
+        nodes_by_id[node_id] = merged
+        return node_id
+
+    def _register_model_edge(
+        self,
+        edges_by_key: Dict[Tuple[str, str, str, str], Dict[str, Any]],
+        from_id: str,
+        to_id: str,
+        kind: str,
+        **payload: Any,
+    ):
+        """Insert or update one topology model edge."""
+        edge_key = (
+            from_id,
+            to_id,
+            kind,
+            str(payload.get("remote_interface") or ""),
+        )
+        edge = edges_by_key.get(edge_key, {"from": from_id, "to": to_id, "kind": kind})
+        for key, value in payload.items():
+            if value not in (None, "", [], {}):
+                edge[key] = value
+        edges_by_key[edge_key] = edge
+
+    def _build_device_node(
+        self,
+        device_name: str,
+        device_ip: str,
+        connected_device_data: Dict[str, Dict[str, Any]],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+    ) -> str:
+        """Register and return one managed-device node."""
+        device_data = connected_device_data.get(device_name, {})
+        node_id = self._make_model_id("device", device_name)
+        self._register_model_node(
+            nodes_by_id,
+            node_id,
+            {
+                "kind": "device",
+                "type": "mikrotik",
+                "label": device_name,
+                "ip": device_ip if device_ip != "Unknown IP" else "",
+                "mac": self._get_device_primary_mac(device_data),
+                "hostname": device_data.get("hostname", ""),
+            },
+        )
+        return node_id
+
+    def _build_interface_node(
+        self,
+        device_name: str,
+        interface_name: str,
+        label: str,
+        interface_data: Dict[str, Any],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+    ) -> str:
+        """Register and return one interface node."""
+        interface_type = self._normalize_interface_type(interface_data)
+        node_id = self._make_model_id("interface", device_name, interface_name)
+        self._register_model_node(
+            nodes_by_id,
+            node_id,
+            {
+                "kind": "interface",
+                "type": interface_type or "unknown",
+                "label": label,
+                "name": interface_name,
+                "device": device_name,
+                "ip": "",
+                "mac": self._get_interface_mac(interface_data),
+                "running": interface_data.get("running", ""),
+            },
+        )
+        return node_id
+
+    def _build_host_node(
+        self,
+        endpoint: Dict[str, Any],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+    ) -> str:
+        """Register and return one host node."""
+        node_id = self._make_model_id("host", endpoint["mac"])
+        self._register_model_node(
+            nodes_by_id,
+            node_id,
+            {
+                "kind": "host",
+                "type": "host",
+                "label": endpoint["name"],
+                "ip": endpoint.get("ip", "") if endpoint.get("ip") != "Unknown IP" else "",
+                "mac": endpoint["mac"],
+            },
+        )
+        return node_id
+
+    def _build_tree_interface_item(
+        self,
+        device_name: str,
+        interface_name: str,
+        label: str,
+        interface_data: Dict[str, Any],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Create one interface tree item."""
+        node_id = self._build_interface_node(
+            device_name,
+            interface_name,
+            label,
+            interface_data,
+            nodes_by_id,
+        )
+        if interface_data:
+            interface_ip_match = re.search(r"\(([^)]+)\)", label)
+            self._register_model_node(
+                nodes_by_id,
+                node_id,
+                {
+                    "ip": interface_ip_match.group(1) if interface_ip_match else "",
+                },
+            )
+        return {"node_id": node_id, "kind": "interface", "children": []}
+
+    def _build_topology_model_tree(
+        self,
+        device_name: str,
+        connected_device_data: Dict[str, Dict[str, Any]],
+        device_port_endpoints: Dict[str, Dict[str, List[Dict[str, Any]]]],
+        visited_devices: Set[str],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+        edges_by_key: Dict[Tuple[str, str, str, str], Dict[str, Any]],
+        rendered_host_macs: Set[str],
+        upstream_port: str = "",
+        port_overrides: Dict[str, List[Dict[str, Any]]] = None,
+        port_labels: Dict[str, str] = None,
+        device_port_labels: Dict[str, Dict[str, str]] = None,
+        standalone_ports: Dict[str, Set[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Build recursive tree items for one managed device."""
+        port_overrides = port_overrides or {}
+        port_labels = port_labels or {}
+        device_port_labels = device_port_labels or {}
+        standalone_ports = standalone_ports or {}
+
+        device_data = connected_device_data.get(device_name, {})
+        interfaces_by_name = self._get_interfaces_by_name(device_data)
+        ports = [
+            port
+            for port in sorted(
+                set(device_port_endpoints.get(device_name, {}))
+                | set(port_overrides)
+                | set(standalone_ports.get(device_name, set()))
+            )
+            if port != upstream_port
+        ]
+
+        device_node_id = self._make_model_id("device", device_name)
+        tree_items = []
+
+        for port in ports:
+            interface_data = interfaces_by_name.get(port, {})
+            display_port = (
+                port_labels.get(port)
+                or device_port_labels.get(device_name, {}).get(port)
+                or port
+            )
+            interface_item = self._build_tree_interface_item(
+                device_name,
+                port,
+                display_port,
+                interface_data,
+                nodes_by_id,
+            )
+            self._register_model_edge(
+                edges_by_key,
+                device_node_id,
+                interface_item["node_id"],
+                "contains",
+            )
+
+            endpoints = port_overrides.get(
+                port,
+                device_port_endpoints.get(device_name, {}).get(port, []),
+            )
+            endpoints = self._reduce_port_endpoints(endpoints, device_port_endpoints)
+            device_count = sum(1 for endpoint in endpoints if endpoint["type"] == "device")
+            host_count = sum(1 for endpoint in endpoints if endpoint["type"] == "host")
+            shared_segment = device_count > 1 or (device_count >= 1 and host_count >= 1)
+
+            endpoint_parent = interface_item
+            endpoint_parent_id = interface_item["node_id"]
+            if shared_segment:
+                segment_id = self._make_model_id("segment", device_name, port, "shared")
+                self._register_model_node(
+                    nodes_by_id,
+                    segment_id,
+                    {
+                        "kind": "segment",
+                        "type": "shared",
+                        "label": "[shared segment]",
+                        "device": device_name,
+                        "port": port,
+                    },
+                )
+                self._register_model_edge(
+                    edges_by_key,
+                    interface_item["node_id"],
+                    segment_id,
+                    "contains",
+                )
+                segment_item = {"node_id": segment_id, "kind": "segment", "children": []}
+                interface_item["children"].append(segment_item)
+                endpoint_parent = segment_item
+                endpoint_parent_id = segment_id
+
+            for endpoint in endpoints:
+                if endpoint["type"] == "wan_chain":
+                    chain_parent = endpoint_parent
+                    chain_parent_id = endpoint_parent_id
+                    for chain_entry in endpoint.get("chain", []):
+                        chain_item = self._build_tree_interface_item(
+                            device_name,
+                            chain_entry["name"],
+                            self._format_interface_label(
+                                chain_entry["name"],
+                                chain_entry.get("interface_data", {}),
+                                chain_entry.get("address", ""),
+                            ),
+                            chain_entry.get("interface_data", {}),
+                            nodes_by_id,
+                        )
+                        self._register_model_edge(
+                            edges_by_key,
+                            chain_parent_id,
+                            chain_item["node_id"],
+                            "contains",
+                        )
+                        chain_parent["children"].append(chain_item)
+                        chain_parent = chain_item
+                        chain_parent_id = chain_item["node_id"]
+                    continue
+
+                if endpoint["type"] == "device":
+                    remote_ip = endpoint.get("ip", "")
+                    device_id = self._build_device_node(
+                        endpoint["name"],
+                        remote_ip,
+                        connected_device_data,
+                        nodes_by_id,
+                    )
+                    remote_port = self._resolve_display_remote_port(
+                        endpoint,
+                        device_name,
+                        device_port_endpoints,
+                    )
+                    child_item = {
+                        "node_id": device_id,
+                        "kind": "device",
+                        "children": [],
+                        "remote_interface": remote_port,
+                        "display_mac": endpoint["mac"],
+                        "already_shown": endpoint["name"] in visited_devices,
+                    }
+                    self._register_model_edge(
+                        edges_by_key,
+                        endpoint_parent_id,
+                        device_id,
+                        "links_to",
+                        remote_interface=remote_port,
+                    )
+                    endpoint_parent["children"].append(child_item)
+
+                    if child_item["already_shown"]:
+                        continue
+
+                    visited_devices.add(endpoint["name"])
+                    child_upstream_port = self._resolve_child_upstream_port(
+                        endpoint,
+                        device_name,
+                        device_port_endpoints,
+                    )
+                    child_item["children"] = self._build_topology_model_tree(
+                        endpoint["name"],
+                        connected_device_data,
+                        device_port_endpoints,
+                        visited_devices,
+                        nodes_by_id,
+                        edges_by_key,
+                        rendered_host_macs,
+                        upstream_port=child_upstream_port,
+                        device_port_labels=device_port_labels,
+                        standalone_ports=standalone_ports,
+                    )
+                    continue
+
+                host_id = self._build_host_node(endpoint, nodes_by_id)
+                rendered_host_macs.add(endpoint["mac"])
+                self._register_model_edge(
+                    edges_by_key,
+                    endpoint_parent_id,
+                    host_id,
+                    "links_to",
+                )
+                endpoint_parent["children"].append({
+                    "node_id": host_id,
+                    "kind": "host",
+                    "children": [],
+                })
+
+            tree_items.append(interface_item)
+
+        return tree_items
+
+    def build_topology_model(self) -> Dict[str, Any]:
+        """Build the canonical structured topology model."""
+        logger.info("Building structured topology model...")
+        self._build_device_label_map()
+        device_port_endpoints = self._build_device_port_endpoints()
+        device_port_labels = self._build_device_port_labels()
+        standalone_ports = self._build_device_standalone_ports()
+        managed_identity_ip_map = self._build_known_identity_ip_map()
+        edge_routers = self._identify_edge_routers()
+        connected_device_data = {
+            self._get_device_label(hostname, device_data): device_data
+            for hostname, device_data in self.devices_data.items()
+            if device_data.get("connected", False)
+        }
+        connected_devices = sorted(connected_device_data)
+        root_devices = sorted(edge_routers.keys()) or connected_devices[:1]
+        remaining_devices = [
+            device_name for device_name in connected_devices
+            if device_name not in root_devices
+        ]
+
+        nodes_by_id: Dict[str, Dict[str, Any]] = {}
+        edges_by_key: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+        rendered_host_macs: Set[str] = set()
+        globally_rendered: Set[str] = set()
+        roots = []
+
+        for root_device in root_devices:
+            if root_device in globally_rendered:
+                continue
+
+            root_ip = managed_identity_ip_map.get(root_device, "Unknown IP")
+            root_node_id = self._build_device_node(
+                root_device,
+                root_ip,
+                connected_device_data,
+                nodes_by_id,
+            )
+            root_device_data = connected_device_data.get(root_device, {})
+            port_overrides, port_labels = self._build_wan_port_overrides(root_device_data)
+            visited_devices = {root_device}
+            roots.append({
+                "node_id": root_node_id,
+                "kind": "device",
+                "children": self._build_topology_model_tree(
+                    root_device,
+                    connected_device_data,
+                    device_port_endpoints,
+                    visited_devices,
+                    nodes_by_id,
+                    edges_by_key,
+                    rendered_host_macs,
+                    port_overrides=port_overrides,
+                    port_labels=port_labels,
+                    device_port_labels=device_port_labels,
+                    standalone_ports=standalone_ports,
+                ),
+            })
+            globally_rendered.update(visited_devices)
+
+        unreached_roots = []
+        for device_name in remaining_devices:
+            if device_name in globally_rendered:
+                continue
+
+            device_ip = managed_identity_ip_map.get(device_name, "Unknown IP")
+            device_node_id = self._build_device_node(
+                device_name,
+                device_ip,
+                connected_device_data,
+                nodes_by_id,
+            )
+            unreached_roots.append({
+                "node_id": device_node_id,
+                "kind": "device",
+                "children": self._build_topology_model_tree(
+                    device_name,
+                    connected_device_data,
+                    device_port_endpoints,
+                    {device_name},
+                    nodes_by_id,
+                    edges_by_key,
+                    rendered_host_macs,
+                    device_port_labels=device_port_labels,
+                    standalone_ports=standalone_ports,
+                ),
+            })
+
+        host_candidates = self._build_host_candidates()
+        unresolved_hosts = []
+        for mac, host in sorted(
+            (
+                (mac, host)
+                for mac, host in host_candidates.items()
+                if mac not in rendered_host_macs
+            ),
+            key=lambda item: (
+                (item[1].get("name") or item[1].get("ip") or item[0]).lower(),
+                item[0],
+            ),
+        ):
+            node_id = self._make_model_id("host", mac)
+            self._register_model_node(
+                nodes_by_id,
+                node_id,
+                {
+                    "kind": "host",
+                    "type": "host",
+                    "label": host.get("name") or host.get("ip") or mac,
+                    "ip": host.get("ip", ""),
+                    "mac": mac,
+                },
+            )
+            unresolved_hosts.append({
+                "node_id": node_id,
+                "kind": "host",
+                "label": self._format_unresolved_host_label(mac, host),
+                "seen_on": sorted(host.get("seen_on", set())),
+                "sources": sorted(host.get("sources", set())),
+            })
+
+        return {
+            "version": 1,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "root_ids": [item["node_id"] for item in roots],
+            "roots": roots,
+            "unreached_roots": unreached_roots,
+            "unresolved_hosts": unresolved_hosts,
+            "nodes": sorted(nodes_by_id.values(), key=lambda node: (node["kind"], node["id"])),
+            "edges": sorted(
+                edges_by_key.values(),
+                key=lambda edge: (edge["from"], edge["to"], edge["kind"]),
+            ),
+        }
+
+    def _format_model_tree_label(
+        self,
+        item: Dict[str, Any],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+    ) -> str:
+        """Format one tree-item line from the structured model."""
+        node = nodes_by_id[item["node_id"]]
+        if node["kind"] == "segment":
+            return node["label"]
+        if node["kind"] == "interface":
+            return node["label"]
+        if node["kind"] == "device":
+            label = node["label"]
+            remote_interface = item.get("remote_interface", "")
+            if remote_interface:
+                label = f"<{remote_interface}> {label}"
+            if node.get("ip"):
+                label = self._format_managed_device_label(label, node["ip"])
+            display_mac = item.get("display_mac") or node.get("mac")
+            if display_mac:
+                label += f" [{display_mac}]"
+            if item.get("already_shown"):
+                label += " [already shown]"
+            return label
+        if node["kind"] == "host":
+            if node.get("ip") and node["ip"] != node["label"]:
+                return f"{node['label']} ({node['ip']}) [{node['mac']}]"
+            if node.get("mac"):
+                return f"{node['label']} [{node['mac']}]"
+        return node.get("label", item["node_id"])
+
+    def _get_model_child_prefix(
+        self,
+        item: Dict[str, Any],
+        child_prefix: str,
+    ) -> str:
+        """Return the child prefix for nested rendering from the model."""
+        if item.get("kind") != "device":
+            return child_prefix
+        remote_padding = f"<{item.get('remote_interface')}> " if item.get("remote_interface") else ""
+        return child_prefix + (" " * 3) + (" " * len(remote_padding))
+
+    def _render_model_tree_items(
+        self,
+        items: List[Dict[str, Any]],
+        nodes_by_id: Dict[str, Dict[str, Any]],
+        prefix: str = "",
+    ) -> List[str]:
+        """Render recursive tree items from the structured model."""
+        lines = []
+        for index, item in enumerate(items):
+            connector = "└─" if index == len(items) - 1 else "├─"
+            child_prefix = prefix + ("   " if index == len(items) - 1 else "│  ")
+            lines.append(
+                f"{prefix}{connector} {self._format_model_tree_label(item, nodes_by_id)}"
+            )
+            if item.get("children"):
+                nested_prefix = self._get_model_child_prefix(item, child_prefix)
+                lines.extend(
+                    self._render_model_tree_items(
+                        item["children"],
+                        nodes_by_id,
+                        prefix=nested_prefix,
+                    )
+                )
+        return lines
+
+    def render_topology_model_text(self, topology_model: Dict[str, Any]) -> List[str]:
+        """Render text topology from the canonical structured model."""
+        nodes_by_id = {node["id"]: node for node in topology_model.get("nodes", [])}
+        lines = ["NETWORK TOPOLOGY", "================", ""]
+
+        for root_item in topology_model.get("roots", []):
+            root_node = nodes_by_id[root_item["node_id"]]
+            header = self._format_managed_device_label(
+                root_node["label"],
+                root_node.get("ip", "") or "Unknown IP",
+            )
+            lines.append(header)
+            if root_item.get("children"):
+                lines.extend(
+                    self._render_model_tree_items(
+                        root_item["children"],
+                        nodes_by_id,
+                    )
+                )
+            else:
+                lines.append("└─ no port data")
+            lines.append("")
+
+        if topology_model.get("unreached_roots"):
+            lines.append("UNREACHED MANAGED DEVICES")
+            lines.append("------------------------")
+            for root_item in topology_model["unreached_roots"]:
+                root_node = nodes_by_id[root_item["node_id"]]
+                lines.append(
+                    self._format_managed_device_label(
+                        root_node["label"],
+                        root_node.get("ip", "") or "Unknown IP",
+                    )
+                )
+                if root_item.get("children"):
+                    lines.extend(
+                        self._render_model_tree_items(
+                            root_item["children"],
+                            nodes_by_id,
+                        )
+                    )
+                else:
+                    lines.append("└─ no port data")
+                lines.append("")
+
+        if topology_model.get("unresolved_hosts"):
+            lines.append("UNRESOLVED HOSTS")
+            lines.append("----------------")
+            for host in topology_model["unresolved_hosts"]:
+                lines.append(host["label"])
+                if host.get("seen_on"):
+                    lines.append(f"  seen on: {', '.join(host['seen_on'])}")
+            lines.append("")
+
+        return lines
+
+    def save_topology_model(
+        self,
+        output_file: str,
+        topology_model: Dict[str, Any],
+    ) -> bool:
+        """Save the structured topology model to JSON."""
+        try:
+            output_dir = os.path.dirname(output_file)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            with open(output_file, "w") as handle:
+                json.dump(topology_model, handle, indent=2)
+            logger.info(f"Topology model saved to {output_file}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save topology model to {output_file}: {e}")
+            return False
+
     def _render_device_tree(
         self,
         device_name: str,
@@ -1287,118 +1905,21 @@ class TopologyBuilder:
 
         return lines
 
-    def generate_topology_output(self, output_file: str = "data/topology.txt") -> bool:
+    def generate_topology_output(
+        self,
+        output_file: str = "data/topology.txt",
+        topology_model: Dict[str, Any] | None = None,
+    ) -> bool:
         """
         Generate the final rooted topology tree.
         
         Args:
             output_file (str): Output file path
+            topology_model (dict, optional): Prebuilt topology model
         """
         logger.info("Generating topology output...")
-        self._build_device_label_map()
-        device_port_endpoints = self._build_device_port_endpoints()
-        device_port_labels = self._build_device_port_labels()
-        standalone_ports = self._build_device_standalone_ports()
-        managed_identity_ip_map = self._build_known_identity_ip_map()
-        edge_routers = self._identify_edge_routers()
-        connected_device_data = {
-            self._get_device_label(hostname, device_data): device_data
-            for hostname, device_data in self.devices_data.items()
-            if device_data.get("connected", False)
-        }
-        connected_devices = sorted(
-            self._get_device_label(hostname, device_data)
-            for hostname, device_data in self.devices_data.items()
-            if device_data.get("connected", False)
-        )
-        root_devices = sorted(edge_routers.keys()) or connected_devices[:1]
-        remaining_devices = [
-            device_name for device_name in connected_devices
-            if device_name not in root_devices
-        ]
-
-        lines = []
-        lines.append("NETWORK TOPOLOGY")
-        lines.append("================")
-        lines.append("")
-
-        globally_rendered = set()
-        rendered_host_macs = set()
-
-        for root_device in root_devices:
-            if root_device in globally_rendered:
-                continue
-
-            root_ip = managed_identity_ip_map.get(root_device, "Unknown IP")
-            header = self._format_managed_device_label(root_device, root_ip)
-            lines.append(header)
-            root_device_data = connected_device_data.get(root_device, {})
-            port_overrides, port_labels = self._build_wan_port_overrides(root_device_data)
-            visited_devices = {root_device}
-            tree_lines = self._render_device_tree(
-                root_device,
-                device_port_endpoints,
-                visited_devices,
-                rendered_host_macs=rendered_host_macs,
-                port_overrides=port_overrides,
-                port_labels=port_labels,
-                device_port_labels=device_port_labels,
-                standalone_ports=standalone_ports,
-            )
-            if tree_lines:
-                lines.extend(tree_lines)
-            else:
-                lines.append("└─ no port data")
-            lines.append("")
-            globally_rendered.update(visited_devices)
-
-        unattached_devices = [
-            device_name
-            for device_name in remaining_devices
-            if device_name not in globally_rendered
-        ]
-        if unattached_devices:
-            lines.append("UNREACHED MANAGED DEVICES")
-            lines.append("------------------------")
-            for device_name in unattached_devices:
-                device_ip = managed_identity_ip_map.get(device_name, "Unknown IP")
-                lines.append(self._format_managed_device_label(device_name, device_ip))
-                tree_lines = self._render_device_tree(
-                    device_name,
-                    device_port_endpoints,
-                    {device_name},
-                    rendered_host_macs=rendered_host_macs,
-                    device_port_labels=device_port_labels,
-                    standalone_ports=standalone_ports,
-                )
-                if tree_lines:
-                    lines.extend(tree_lines)
-                else:
-                    lines.append("└─ no port data")
-                lines.append("")
-
-        host_candidates = self._build_host_candidates()
-        unresolved_hosts = [
-            (mac, host)
-            for mac, host in host_candidates.items()
-            if mac not in rendered_host_macs
-        ]
-        unresolved_hosts.sort(
-            key=lambda item: (
-                (item[1].get("name") or item[1].get("ip") or item[0]).lower(),
-                item[0],
-            )
-        )
-        if unresolved_hosts:
-            lines.append("UNRESOLVED HOSTS")
-            lines.append("----------------")
-            for mac, host in unresolved_hosts:
-                lines.append(self._format_unresolved_host_label(mac, host))
-                if host.get("seen_on"):
-                    lines.append(
-                        f"  seen on: {', '.join(sorted(host['seen_on']))}"
-                    )
-            lines.append("")
+        topology_model = topology_model or self.build_topology_model()
+        lines = self.render_topology_model_text(topology_model)
 
         # Write to file
         try:
@@ -1414,13 +1935,19 @@ class TopologyBuilder:
             logger.error(f"Failed to save topology output to {output_file}: {e}")
             return False
     
-    def build_complete_topology(self, data_file: str, output_file: str = "data/topology.txt"):
+    def build_complete_topology(
+        self,
+        data_file: str,
+        output_file: str = "data/topology.txt",
+        json_output_file: str | None = "data/topology_graph.json",
+    ):
         """
         Execute the complete topology building process.
         
         Args:
             data_file (str): Input data file
             output_file (str): Output file for topology
+            json_output_file (str | None): Output file for structured topology JSON
         """
         # Load data
         if not self.load_data(data_file):
@@ -1432,8 +1959,12 @@ class TopologyBuilder:
         self.build_ip_name_map()
         self.build_mac_port_map()
 
-        # Generate output
-        return self.generate_topology_output(output_file)
+        topology_model = self.build_topology_model()
+
+        if json_output_file and not self.save_topology_model(json_output_file, topology_model):
+            return False
+
+        return self.generate_topology_output(output_file, topology_model=topology_model)
 
 def main():
     """Example usage of the TopologyBuilder."""

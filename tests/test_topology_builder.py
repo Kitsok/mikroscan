@@ -115,12 +115,69 @@ def test_generate_topology_output_builds_rooted_tree():
     print("✓ rooted topology tree test passed")
 
 
-def test_nested_child_device_ports_keep_tree_indentation():
-    """Nested device subtrees should keep tree prefixes, not label-width spacing."""
+def test_build_topology_model_includes_roots_nodes_and_unresolved_hosts():
+    """Structured topology model should capture roots, nodes, and unresolved hosts."""
     builder = TopologyBuilder()
     builder.devices_data = {
         "1.1.1.1": {
             "hostname": "1.1.1.1",
+            "connected": True,
+            "device_info": {"identity": "Root"},
+            "interfaces": [
+                {"name": "ether1", "type": "ether", "mac_address": "AA:AA:AA:AA:AA:01"},
+                {"name": "wg-test", "type": "wg"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+                {"interface": "ether1", "mac_address": "CC:CC:CC:CC:CC:01"},
+            ],
+            "dhcp_leases": [
+                {"mac_address": "BB:BB:BB:BB:BB:01", "active_address": "192.168.0.2", "host_name": "Branch"},
+                {"mac_address": "CC:CC:CC:CC:CC:01", "active_address": "192.168.0.20", "host_name": "offline-host"},
+            ],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "10.10.10.1/24", "interface": "wg-test"}],
+            "neighbors": [],
+        },
+        "192.168.0.2": {
+            "hostname": "192.168.0.2",
+            "connected": True,
+            "device_info": {"identity": "Branch"},
+            "interfaces": [{"name": "ether1", "type": "ether", "mac_address": "BB:BB:BB:BB:BB:01"}],
+            "bridge_hosts": [{"interface": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"}],
+            "dhcp_leases": [],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "192.168.0.2/24"}],
+            "neighbors": [],
+        },
+    }
+
+    builder.build_mac_name_map()
+    builder.build_mac_ip_map()
+    builder.build_ip_name_map()
+    builder.build_mac_port_map()
+
+    topology_model = builder.build_topology_model()
+
+    node_ids = {node["id"] for node in topology_model["nodes"]}
+    assert topology_model["root_ids"]
+    assert any(node["kind"] == "device" and node["label"] == "Root" for node in topology_model["nodes"])
+    assert any(node["kind"] == "interface" and node["name"] == "wg-test" for node in topology_model["nodes"])
+    assert any(edge["kind"] == "contains" for edge in topology_model["edges"])
+    assert any(edge["kind"] == "links_to" for edge in topology_model["edges"])
+    assert topology_model["unresolved_hosts"]
+    assert topology_model["unresolved_hosts"][0]["node_id"] in node_ids
+    print("✓ structured topology model test passed")
+
+
+def test_nested_child_device_ports_keep_tree_indentation():
+    """Nested device subtrees should keep tree prefixes, not label-width spacing."""
+    builder = TopologyBuilder()
+    builder.devices_data = {
+        "10.0.0.1": {
+            "hostname": "10.0.0.1",
             "connected": True,
             "device_info": {"identity": "Root"},
             "interfaces": [
@@ -132,11 +189,11 @@ def test_nested_child_device_ports_keep_tree_indentation():
             "dhcp_leases": [],
             "dns_static": [],
             "arp_table": [],
-            "ip_addresses": [{"address": "1.1.1.1/24"}],
+            "ip_addresses": [{"address": "8.8.8.8/32"}],
             "neighbors": [],
         },
-        "2.2.2.2": {
-            "hostname": "2.2.2.2",
+        "10.0.0.2": {
+            "hostname": "10.0.0.2",
             "connected": True,
             "device_info": {"identity": "ChildWithLongName"},
             "interfaces": [
@@ -156,7 +213,7 @@ def test_nested_child_device_ports_keep_tree_indentation():
             ],
             "dns_static": [],
             "arp_table": [],
-            "ip_addresses": [{"address": "2.2.2.2/24"}],
+            "ip_addresses": [{"address": "10.0.0.2/24"}],
             "neighbors": [],
         },
     }
@@ -181,7 +238,7 @@ def test_nested_child_device_ports_keep_tree_indentation():
     port_line = next(line for line in lines if "ether2 [BB:BB:BB:BB:BB:02]" in line)
 
     assert child_line.startswith("   └─ <ether1> ChildWithLongName")
-    assert port_line.startswith("            └─ ether2 [BB:BB:BB:BB:BB:02]")
+    assert port_line.lstrip().startswith("└─ ether2 [BB:BB:BB:BB:BB:02]")
     print("✓ nested child indentation test passed")
 
 
@@ -862,6 +919,7 @@ def main():
 
     try:
         test_generate_topology_output_builds_rooted_tree()
+        test_build_topology_model_includes_roots_nodes_and_unresolved_hosts()
         test_generate_topology_output_hides_shared_segment_hosts_behind_single_child()
         test_generate_topology_output_marks_multi_device_ports_as_shared_segments()
         test_generate_topology_output_marks_device_plus_hosts_as_shared_segment()

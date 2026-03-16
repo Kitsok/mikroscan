@@ -68,6 +68,7 @@ class TestFeatures(unittest.TestCase):
         mock_generate_topology.assert_called_once_with(
             data_file="data/collected_data.json",
             output_file="data/topology.txt",
+            json_output_file="data/topology_graph.json",
         )
         print("✓ Full mapping topology generation test passed")
 
@@ -101,6 +102,7 @@ class TestFeatures(unittest.TestCase):
         mock_generate_topology.assert_called_once_with(
             data_file="data/collected_data.json",
             output_file="custom/topology.txt",
+            json_output_file="data/topology_graph.json",
         )
         print("✓ Full mapping output path test passed")
     

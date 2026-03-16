@@ -520,6 +520,7 @@ def test_scan_file_also_generates_topology():
         mapper.generate_topology.assert_called_once_with(
             data_file="data/collected_data.json",
             output_file="data/topology.txt",
+            json_output_file="data/topology_graph.json",
         )
         print("✓ scan-file topology generation test passed")
     finally:
@@ -677,8 +678,27 @@ def test_generate_topology_exits_non_zero_on_failure():
     mapper.generate_topology.assert_called_once_with(
         data_file="data/collected_data.json",
         output_file="data/topology.txt",
+        json_output_file="data/topology_graph.json",
     )
     print("✓ topology CLI failure exit-code test passed")
+
+
+def test_generate_topology_json_cli_uses_default_output():
+    """The topology JSON CLI path should use the default JSON output file."""
+    with patch.object(sys, "argv", [
+        "main.py",
+        "--generate-topology-json",
+    ]), patch("main.MikrotikMapper") as MockMapper:
+        mapper = MockMapper.return_value
+        mapper.generate_topology_json.return_value = True
+
+        main_module.main()
+
+    mapper.generate_topology_json.assert_called_once_with(
+        data_file="data/collected_data.json",
+        output_file="data/topology_graph.json",
+    )
+    print("✓ topology JSON CLI default-output test passed")
 
 
 def test_full_scan_also_generates_topology():
@@ -953,6 +973,7 @@ def main():
         test_scan_file_exits_non_zero_when_no_devices_connect()
         test_scan_file_does_not_preauth_before_collection()
         test_generate_topology_exits_non_zero_on_failure()
+        test_generate_topology_json_cli_uses_default_output()
         test_full_scan_also_generates_topology()
         test_run_full_mapping_returns_empty_on_topology_failure()
         test_direct_build_map_cli_exits_non_zero_on_failure()

@@ -23,6 +23,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 logger = logging.getLogger(__name__)
 DEFAULT_DATA_FILE = "data/collected_data.json"
 DEFAULT_SCAN_FILE = "data/scan_results.json"
+DEFAULT_TOPOLOGY_JSON_FILE = "data/topology_graph.json"
 
 class MikrotikMapper:
     """Main application class for Mikrotik network mapping."""
@@ -282,23 +283,50 @@ class MikrotikMapper:
         return connection_map
     
     def generate_topology(self, data_file: str = DEFAULT_DATA_FILE,
-                          output_file: str = "data/topology.txt"):
+                          output_file: str = "data/topology.txt",
+                          json_output_file: str = DEFAULT_TOPOLOGY_JSON_FILE):
         """
         Generate network topology from collected data.
         
         Args:
             data_file (str): JSON file with collected device data
             output_file (str): Output file for topology
+            json_output_file (str): Output file for structured topology JSON
         """
         logger.info(f"Generating topology from {data_file}")
 
         builder = TopologyBuilder()
-        if builder.build_complete_topology(data_file, output_file):
+        if builder.build_complete_topology(data_file, output_file, json_output_file):
             logger.info("Topology generation complete")
             return True
 
         logger.error("Failed to generate topology")
         return False
+
+    def generate_topology_json(
+        self,
+        data_file: str = DEFAULT_DATA_FILE,
+        output_file: str = DEFAULT_TOPOLOGY_JSON_FILE,
+    ) -> bool:
+        """Generate only the structured topology JSON model."""
+        logger.info(f"Generating structured topology JSON from {data_file}")
+
+        builder = TopologyBuilder()
+        if not builder.load_data(data_file):
+            logger.error("Failed to load topology input data")
+            return False
+
+        builder.build_mac_name_map()
+        builder.build_mac_ip_map()
+        builder.build_ip_name_map()
+        builder.build_mac_port_map()
+        topology_model = builder.build_topology_model()
+        if not builder.save_topology_model(output_file, topology_model):
+            logger.error("Failed to save structured topology JSON")
+            return False
+
+        logger.info("Structured topology JSON generation complete")
+        return True
     
     def run_full_mapping(self, ip_range: str, username: str = None, password: str = None,
                          key_file: str = None, port: int = 8728, timeout: int = 5,
@@ -306,7 +334,8 @@ class MikrotikMapper:
                          use_api_ssl: bool = False,
                          output_file: str = "data/final_map.json",
                          readable_file: str = "data/connections.txt",
-                         topology_file: str = "data/topology.txt") -> dict:
+                         topology_file: str = "data/topology.txt",
+                         topology_json_file: str = DEFAULT_TOPOLOGY_JSON_FILE) -> dict:
         """
         Run complete network mapping workflow.
         
@@ -323,6 +352,7 @@ class MikrotikMapper:
             output_file (str): File to save connection map (JSON)
             readable_file (str): File to save human-readable connections
             topology_file (str): File to save generated topology
+            topology_json_file (str): File to save structured topology JSON
             
         Returns:
             dict: Final connection map
@@ -371,6 +401,7 @@ class MikrotikMapper:
         topology_generated = self.generate_topology(
             data_file=DEFAULT_DATA_FILE,
             output_file=topology_file,
+            json_output_file=topology_json_file,
         )
 
         if not topology_generated:
@@ -434,6 +465,12 @@ Examples:
         "--generate-topology",
         action="store_true",
         help="Generate network topology from collected data"
+    )
+
+    parser.add_argument(
+        "--generate-topology-json",
+        action="store_true",
+        help="Generate structured topology JSON from collected data"
     )
     
     # Credential management
@@ -532,6 +569,12 @@ Examples:
         default="data/connections.txt",
         help="File for human-readable connections (default: data/connections.txt)"
     )
+
+    parser.add_argument(
+        "--topology-json-output",
+        default=DEFAULT_TOPOLOGY_JSON_FILE,
+        help=f"Output file for structured topology JSON (default: {DEFAULT_TOPOLOGY_JSON_FILE})"
+    )
     
     args = parser.parse_args()
     
@@ -604,7 +647,18 @@ Examples:
         logger.info("Generating network topology")
         if not mapper.generate_topology(
             data_file=args.data_file or DEFAULT_DATA_FILE,
-            output_file="data/topology.txt"
+            output_file="data/topology.txt",
+            json_output_file=args.topology_json_output,
+        ):
+            sys.exit(1)
+        return
+
+    if args.generate_topology_json:
+        mapper = MikrotikMapper()
+        logger.info("Generating structured topology JSON")
+        if not mapper.generate_topology_json(
+            data_file=args.data_file or DEFAULT_DATA_FILE,
+            output_file=args.topology_json_output,
         ):
             sys.exit(1)
         return
@@ -646,7 +700,8 @@ Examples:
                     sys.exit(1)
                 if not mapper.generate_topology(
                     data_file=DEFAULT_DATA_FILE,
-                    output_file="data/topology.txt"
+                    output_file="data/topology.txt",
+                    json_output_file=args.topology_json_output,
                 ):
                     sys.exit(1)
             else:
@@ -669,6 +724,7 @@ Examples:
                 output_file=args.output,
                 readable_file=args.readable_output,
                 topology_file="data/topology.txt",
+                topology_json_file=args.topology_json_output,
             )
             if not connection_map:
                 sys.exit(1)
