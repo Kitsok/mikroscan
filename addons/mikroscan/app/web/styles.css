@@ -107,13 +107,13 @@ input {
 
 .actions {
   display: grid;
-  gap: 7px;
+  gap: 6px;
 }
 
 .action-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
+  gap: 4px;
 }
 
 button {
@@ -131,19 +131,21 @@ button {
 .icon-button {
   display: inline-grid;
   justify-items: center;
-  gap: 3px;
-  min-height: 54px;
+  gap: 2px;
+  min-height: 40px;
+  padding: 5px 6px;
   text-align: center;
 }
 
 .icon-button .icon {
-  font-size: 0.98rem;
+  font-size: 0.82rem;
   line-height: 1;
 }
 
 .icon-button .button-label {
-  font-size: 0.68rem;
+  font-size: 0.58rem;
   letter-spacing: 0.02em;
+  line-height: 1;
 }
 
 button:hover {
