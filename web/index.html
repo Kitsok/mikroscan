@@ -17,12 +17,26 @@
 
       <section class="panel actions">
         <div class="panel-title">Actions</div>
-        <button id="refresh-topology" type="button">Reload Topology</button>
-        <button id="generate-topology" type="button">Regenerate Topology</button>
-        <button id="scan-network" type="button">Refresh From Devices</button>
-        <button id="reset-layout" type="button">Reset Layout</button>
+        <div class="action-grid">
+          <button id="refresh-topology" class="icon-button" type="button" title="Reload topology" aria-label="Reload topology">
+            <span class="icon" aria-hidden="true">&#8635;</span>
+            <span class="button-label">Reload</span>
+          </button>
+          <button id="generate-topology" class="icon-button" type="button" title="Regenerate topology" aria-label="Regenerate topology">
+            <span class="icon" aria-hidden="true">&#916;</span>
+            <span class="button-label">Build</span>
+          </button>
+          <button id="scan-network" class="icon-button" type="button" title="Refresh from devices" aria-label="Refresh from devices">
+            <span class="icon" aria-hidden="true">&#9673;</span>
+            <span class="button-label">Scan</span>
+          </button>
+          <button id="reset-layout" class="icon-button" type="button" title="Reset layout" aria-label="Reset layout">
+            <span class="icon" aria-hidden="true">&#8864;</span>
+            <span class="button-label">Reset</span>
+          </button>
+        </div>
         <label class="field">
-          <span>Optional scan range</span>
+          <span>Scan range</span>
           <input id="scan-range" type="text" placeholder="192.168.1.0/24">
         </label>
       </section>
@@ -49,7 +63,7 @@
           <div class="eyebrow">Map</div>
           <h2 id="map-title">Current topology</h2>
         </div>
-        <div class="hint">Click to inspect. Double-click to collapse. Drag to reposition.</div>
+        <div class="hint">Click inspect. Double-click collapse. Drag move.</div>
       </div>
 
       <div id="canvas-wrapper" class="canvas-wrapper">

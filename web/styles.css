@@ -36,26 +36,26 @@ body {
 
 .shell {
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-columns: clamp(160px, 14vw, 220px) minmax(0, 1fr);
   min-height: 100vh;
 }
 
 .sidebar {
-  padding: 24px 20px;
+  padding: 12px 10px;
   border-right: 1px solid rgba(29, 43, 42, 0.08);
   background: rgba(250, 245, 234, 0.82);
   backdrop-filter: blur(10px);
 }
 
 .workspace {
-  padding: 24px;
+  padding: 12px;
   min-width: 0;
 }
 
 .brand h1,
 .workspace-header h2 {
   margin: 0;
-  font-size: 2rem;
+  font-size: 1.35rem;
   line-height: 1;
   letter-spacing: -0.03em;
 }
@@ -72,9 +72,9 @@ input {
 }
 
 .eyebrow {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   color: var(--accent);
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.14em;
@@ -83,21 +83,22 @@ input {
 .lede,
 .hint {
   color: var(--muted);
-  line-height: 1.5;
+  line-height: 1.35;
+  font-size: 0.78rem;
 }
 
 .panel {
-  margin-top: 18px;
-  padding: 16px;
+  margin-top: 10px;
+  padding: 10px;
   background: var(--paper);
   border: 1px solid rgba(29, 43, 42, 0.08);
-  border-radius: 18px;
+  border-radius: 14px;
   box-shadow: var(--shadow);
 }
 
 .panel-title {
-  margin-bottom: 12px;
-  font-size: 0.88rem;
+  margin-bottom: 8px;
+  font-size: 0.78rem;
   font-weight: 700;
   color: var(--accent);
   letter-spacing: 0.06em;
@@ -106,19 +107,43 @@ input {
 
 .actions {
   display: grid;
-  gap: 10px;
+  gap: 7px;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
 }
 
 button {
   border: 0;
-  border-radius: 999px;
-  padding: 12px 16px;
+  border-radius: 12px;
+  padding: 8px 10px;
   background: var(--ink);
   color: #fff9f0;
-  font-size: 0.95rem;
+  font-size: 0.76rem;
   font-weight: 700;
   cursor: pointer;
   transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+}
+
+.icon-button {
+  display: inline-grid;
+  justify-items: center;
+  gap: 3px;
+  min-height: 54px;
+  text-align: center;
+}
+
+.icon-button .icon {
+  font-size: 0.98rem;
+  line-height: 1;
+}
+
+.icon-button .button-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
 }
 
 button:hover {
@@ -133,25 +158,26 @@ button:disabled {
 
 .field {
   display: grid;
-  gap: 6px;
-  font-size: 0.9rem;
+  gap: 4px;
+  font-size: 0.72rem;
   color: var(--muted);
 }
 
 input {
   border: 1px solid rgba(29, 43, 42, 0.14);
-  border-radius: 12px;
-  padding: 11px 12px;
+  border-radius: 10px;
+  padding: 8px 10px;
   background: rgba(255, 252, 244, 0.92);
   color: var(--ink);
-  font-size: 0.95rem;
+  font-size: 0.82rem;
 }
 
 .status-grid {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 8px 12px;
+  gap: 6px 10px;
   margin: 0;
+  font-size: 0.82rem;
 }
 
 .status-grid dt {
@@ -166,13 +192,14 @@ input {
 .details-body,
 .unresolved-list {
   color: var(--ink);
-  line-height: 1.45;
+  line-height: 1.35;
+  font-size: 0.82rem;
 }
 
 .details-body dl {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 8px 12px;
+  gap: 6px 10px;
   margin: 0;
 }
 
@@ -188,23 +215,23 @@ input {
 
 .unresolved-list ul {
   margin: 0;
-  padding-left: 18px;
+  padding-left: 16px;
 }
 
 .workspace-header {
   display: flex;
   justify-content: space-between;
   align-items: end;
-  gap: 16px;
-  margin-bottom: 18px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .canvas-wrapper {
   position: relative;
   overflow: auto;
-  height: calc(100vh - 120px);
+  height: calc(100vh - 82px);
   border: 1px solid rgba(29, 43, 42, 0.08);
-  border-radius: 28px;
+  border-radius: 20px;
   background:
     linear-gradient(90deg, rgba(29, 43, 42, 0.03) 1px, transparent 1px),
     linear-gradient(rgba(29, 43, 42, 0.03) 1px, transparent 1px),
@@ -226,7 +253,7 @@ input {
 
 .edge-line {
   stroke: var(--line);
-  stroke-width: 2.5;
+  stroke-width: 2;
   fill: none;
 }
 
@@ -236,20 +263,20 @@ input {
 
 .topology-node {
   position: absolute;
-  min-width: 180px;
-  max-width: 260px;
-  padding: 10px 12px;
-  border-radius: 16px;
+  min-width: 132px;
+  max-width: 190px;
+  padding: 7px 9px;
+  border-radius: 12px;
   border: 1px solid rgba(29, 43, 42, 0.08);
   background: rgba(255, 251, 242, 0.94);
-  box-shadow: 0 10px 28px rgba(29, 43, 42, 0.12);
+  box-shadow: 0 7px 20px rgba(29, 43, 42, 0.1);
   cursor: grab;
   pointer-events: auto;
   user-select: none;
 }
 
 .topology-node.selected {
-  outline: 3px solid rgba(13, 107, 96, 0.24);
+  outline: 2px solid rgba(13, 107, 96, 0.24);
 }
 
 .topology-node.collapsed {
@@ -257,54 +284,54 @@ input {
 }
 
 .topology-node.device {
-  border-left: 8px solid var(--device);
+  border-left: 6px solid var(--device);
 }
 
 .topology-node.interface {
-  border-left: 8px solid var(--interface);
+  border-left: 6px solid var(--interface);
 }
 
 .topology-node.host {
-  border-left: 8px solid var(--host);
+  border-left: 6px solid var(--host);
 }
 
 .topology-node.segment {
-  border-left: 8px solid var(--segment);
+  border-left: 6px solid var(--segment);
 }
 
 .node-kind {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.6rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.09em;
 }
 
 .node-label {
-  font-size: 0.98rem;
+  font-size: 0.8rem;
   font-weight: 700;
-  line-height: 1.3;
+  line-height: 1.2;
   word-break: break-word;
 }
 
 .node-meta {
-  margin-top: 6px;
+  margin-top: 4px;
   color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1.35;
+  font-size: 0.68rem;
+  line-height: 1.2;
   word-break: break-word;
 }
 
 .pill {
   display: inline-flex;
   align-items: center;
-  margin: 4px 8px 0 0;
-  padding: 3px 8px;
+  margin: 3px 5px 0 0;
+  padding: 2px 6px;
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 0.76rem;
+  font-size: 0.64rem;
   font-weight: 700;
 }
 

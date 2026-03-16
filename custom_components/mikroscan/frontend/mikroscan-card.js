@@ -1,8 +1,8 @@
-const H_SPACING = 250;
-const V_SPACING = 100;
-const NODE_WIDTH = 210;
-const NODE_HEIGHT = 70;
-const PADDING = 56;
+const H_SPACING = 210;
+const V_SPACING = 76;
+const NODE_WIDTH = 164;
+const NODE_HEIGHT = 52;
+const PADDING = 40;
 
 const CARD_STYLE = `
   :host {
@@ -10,8 +10,8 @@ const CARD_STYLE = `
   }
   .shell {
     display: grid;
-    gap: 14px;
-    min-height: 420px;
+    gap: 10px;
+    min-height: 300px;
     color: var(--primary-text-color);
   }
   ha-card {
@@ -20,13 +20,13 @@ const CARD_STYLE = `
   .toolbar {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: 8px;
     align-items: center;
-    padding: 16px 16px 0;
+    padding: 10px 10px 0;
   }
   .toolbar h2 {
     margin: 0 auto 0 0;
-    font-size: 1.05rem;
+    font-size: 0.92rem;
     font-weight: 700;
   }
   .toolbar mwc-button {
@@ -35,7 +35,7 @@ const CARD_STYLE = `
   .canvas {
     position: relative;
     overflow: auto;
-    min-height: 420px;
+    min-height: 300px;
     background:
       linear-gradient(90deg, rgba(120, 120, 120, 0.08) 1px, transparent 1px),
       linear-gradient(rgba(120, 120, 120, 0.08) 1px, transparent 1px),
@@ -53,7 +53,7 @@ const CARD_STYLE = `
   }
   .edge {
     stroke: rgba(120, 120, 120, 0.4);
-    stroke-width: 2.5;
+    stroke-width: 2;
     fill: none;
   }
   .nodes {
@@ -61,71 +61,71 @@ const CARD_STYLE = `
   }
   .node {
     position: absolute;
-    min-width: 170px;
-    max-width: 240px;
-    padding: 10px 12px;
-    border-radius: 14px;
+    min-width: 132px;
+    max-width: 190px;
+    padding: 7px 9px;
+    border-radius: 10px;
     background: var(--ha-card-background, var(--card-background-color));
     border: 1px solid var(--divider-color);
-    box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0, 0, 0, 0.12));
+    box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0, 0, 0, 0.1));
     pointer-events: auto;
     user-select: none;
     cursor: grab;
   }
   .node.selected {
-    outline: 3px solid color-mix(in srgb, var(--primary-color) 28%, transparent);
+    outline: 2px solid color-mix(in srgb, var(--primary-color) 28%, transparent);
   }
-  .node.device { border-left: 8px solid #1e6d92; }
-  .node.interface { border-left: 8px solid #9a5d1d; }
-  .node.host { border-left: 8px solid #567d2b; }
-  .node.segment { border-left: 8px solid #74408f; }
+  .node.device { border-left: 6px solid #1e6d92; }
+  .node.interface { border-left: 6px solid #9a5d1d; }
+  .node.host { border-left: 6px solid #567d2b; }
+  .node.segment { border-left: 6px solid #74408f; }
   .kind {
-    font-size: 0.72rem;
+    font-size: 0.6rem;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.08em;
     color: var(--secondary-text-color);
     font-weight: 700;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
   }
   .label {
-    font-size: 0.95rem;
+    font-size: 0.8rem;
     font-weight: 700;
-    line-height: 1.3;
+    line-height: 1.18;
     word-break: break-word;
   }
   .meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 8px;
+    gap: 4px;
+    margin-top: 4px;
   }
   .pill {
     display: inline-flex;
     align-items: center;
-    padding: 3px 8px;
+    padding: 2px 6px;
     border-radius: 999px;
     background: color-mix(in srgb, var(--primary-color) 14%, transparent);
     color: var(--primary-color);
-    font-size: 0.75rem;
+    font-size: 0.64rem;
     font-weight: 700;
   }
   .footer {
     display: grid;
-    gap: 12px;
-    padding: 12px 16px 16px;
+    gap: 8px;
+    padding: 8px 10px 10px;
     border-top: 1px solid var(--divider-color);
   }
   .status {
     color: var(--secondary-text-color);
-    font-size: 0.9rem;
+    font-size: 0.78rem;
   }
   .details {
-    font-size: 0.9rem;
-    line-height: 1.4;
+    font-size: 0.78rem;
+    line-height: 1.3;
   }
   .details strong {
     display: inline-block;
-    min-width: 92px;
+    min-width: 76px;
   }
 `;
 
