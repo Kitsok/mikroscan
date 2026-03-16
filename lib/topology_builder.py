@@ -24,7 +24,7 @@ class TopologyBuilder:
         self.ip_name_map = {}
         self.mac_port_map = {}
         self.device_label_map = {}
-        self.overlay_interface_types = {"wireguard", "zerotier"}
+        self.overlay_interface_types = {"wireguard", "wg", "zerotier"}
 
     def _clean_name(self, name: str) -> str:
         """Normalize display names parsed from RouterOS output."""
@@ -460,7 +460,7 @@ class TopologyBuilder:
     def _get_overlay_type_label(self, interface_data: Dict[str, Any]) -> str:
         """Return a display suffix for overlay interface types."""
         interface_type = self._normalize_interface_type(interface_data)
-        if interface_type == "wireguard":
+        if interface_type in {"wireguard", "wg"}:
             return " [WireGuard]"
         if interface_type == "zerotier":
             return " [ZeroTier]"
