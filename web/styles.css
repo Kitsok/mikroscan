@@ -60,6 +60,16 @@ body {
   letter-spacing: -0.03em;
 }
 
+.build-id {
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: "Trebuchet MS", "Lucida Sans Unicode", "Lucida Grande", sans-serif;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .lede,
 .hint,
 .panel,
