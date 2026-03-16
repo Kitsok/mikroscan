@@ -11,11 +11,11 @@
     saveLayoutTimer: null,
   };
 
-  const H_SPACING = 280;
-  const V_SPACING = 110;
-  const NODE_WIDTH = 220;
-  const NODE_HEIGHT = 72;
-  const PADDING = 80;
+  const H_SPACING = 214;
+  const V_SPACING = 76;
+  const NODE_WIDTH = 164;
+  const NODE_HEIGHT = 52;
+  const PADDING = 48;
 
   const elements = {
     mapTitle: document.getElementById("map-title"),
