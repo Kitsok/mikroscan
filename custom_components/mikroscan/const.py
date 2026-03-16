@@ -2,6 +2,7 @@
 
 DOMAIN = "mikroscan"
 PLATFORMS = ["sensor", "button"]
+FRONTEND_CARD_URL = "/api/mikroscan/static/mikroscan-card.js"
 
 CONF_SCAN_RANGE = "scan_range"
 CONF_WEB_PORT = "web_port"

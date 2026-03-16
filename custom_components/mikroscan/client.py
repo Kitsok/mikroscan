@@ -71,3 +71,11 @@ class MikroscanApiClient:
     async def async_generate_topology(self) -> dict[str, Any]:
         """Trigger topology regeneration."""
         return await self._request("POST", "/api/generate-topology", payload={})
+
+    async def async_get_layout(self) -> dict[str, Any]:
+        """Return the persisted layout."""
+        return await self._request("GET", "/api/layout", allow_not_found=True)
+
+    async def async_save_layout(self, positions: dict[str, Any]) -> dict[str, Any]:
+        """Persist the current layout positions."""
+        return await self._request("POST", "/api/layout", payload={"positions": positions})

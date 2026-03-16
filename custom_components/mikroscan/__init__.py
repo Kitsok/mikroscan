@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import voluptuous as vol
 
+from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -21,11 +22,13 @@ from .const import (
     DEFAULT_SCAN_RANGE,
     DEFAULT_WEB_PORT,
     DOMAIN,
+    FRONTEND_CARD_URL,
     PLATFORMS,
     SERVICE_GENERATE_TOPOLOGY,
     SERVICE_SCAN,
 )
 from .coordinator import MikroscanDataUpdateCoordinator
+from .views import async_register_static, async_register_views
 
 
 SCAN_SERVICE_SCHEMA = vol.Schema(
@@ -38,6 +41,9 @@ SCAN_SERVICE_SCHEMA = vol.Schema(
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Mikroscan integration."""
     hass.data.setdefault(DOMAIN, {})
+    await async_register_static(hass)
+    await async_register_views(hass)
+    add_extra_js_url(hass, FRONTEND_CARD_URL)
     return True
 
 
