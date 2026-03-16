@@ -7,7 +7,7 @@ Processes collected data and builds connection relationships.
 import json
 import logging
 import os
-from typing import Dict, List, Set, Tuple, Any
+from typing import Dict, List, Set, Tuple, Any, Optional
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,6 +21,7 @@ class ConnectionMapper:
         self.devices_data = {}
         self.connection_map = {}
         self.device_mac_map = {}
+        self.device_label_map = {}
         self.host_interface_map = {}
         self.managed_device_names = set()
 
@@ -30,7 +31,7 @@ class ConnectionMapper:
             return ""
         return name.strip().strip('"').strip()
     
-    def load_data(self, filename: str) -> Dict:
+    def load_data(self, filename: str) -> Optional[Dict]:
         """
         Load collected device data from a JSON file.
         
@@ -47,7 +48,8 @@ class ConnectionMapper:
             return self.devices_data
         except Exception as e:
             logger.error(f"Failed to load data from {filename}: {e}")
-            return {}
+            self.devices_data = {}
+            return None
     
     def set_data(self, data: Dict):
         """
@@ -57,6 +59,30 @@ class ConnectionMapper:
             data (Dict): Device data
         """
         self.devices_data = data
+
+    def _build_device_label_map(self) -> Dict[str, str]:
+        """Build stable per-host labels, disambiguating duplicate identities."""
+        identity_counts = {}
+        identities = {}
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            identity = self._clean_name(
+                device_data.get("device_info", {}).get("identity", hostname)
+            ) or hostname
+            identities[hostname] = identity
+            identity_counts[identity] = identity_counts.get(identity, 0) + 1
+
+        labels = {}
+        for hostname, identity in identities.items():
+            if identity_counts.get(identity, 0) > 1:
+                labels[hostname] = f"{identity} ({hostname})"
+            else:
+                labels[hostname] = identity
+
+        return labels
     
     def build_connection_map(self) -> Dict:
         """
@@ -73,6 +99,7 @@ class ConnectionMapper:
             "connections": [],
             "hosts": {}
         }
+        self.device_label_map = self._build_device_label_map()
         self.device_mac_map = self._build_device_mac_map()
         self.host_interface_map = self._build_host_interface_map()
         self.managed_device_names = {
@@ -88,7 +115,7 @@ class ConnectionMapper:
                 continue
             
             # Add device to map
-            device_id = device_data["device_info"].get("identity", hostname)
+            device_id = self.device_label_map.get(hostname, hostname)
             self.connection_map["devices"][device_id] = {
                 "hostname": hostname,
                 "info": device_data["device_info"],
@@ -177,7 +204,7 @@ class ConnectionMapper:
             if not device_data.get("connected", False):
                 continue
 
-            device_id = device_data.get("device_info", {}).get("identity", hostname)
+            device_id = self.device_label_map.get(hostname, hostname)
             for interface in device_data.get("interfaces", []):
                 mac = (interface.get("mac_address") or interface.get("link_layer_address") or "").upper()
                 if mac:
@@ -193,7 +220,7 @@ class ConnectionMapper:
             if not device_data.get("connected", False):
                 continue
 
-            device_id = device_data.get("device_info", {}).get("identity", hostname)
+            device_id = self.device_label_map.get(hostname, hostname)
             device_host_map = {}
             for host in device_data.get("bridge_hosts", []):
                 mac_address = (host.get("mac_address") or "").upper()
@@ -215,7 +242,7 @@ class ConnectionMapper:
             if not device_data.get("connected", False):
                 continue
             
-            device_id = device_data["device_info"].get("identity", hostname)
+            device_id = self.device_label_map.get(hostname, hostname)
             
             # Collect ARP entries
             for arp_entry in device_data.get("arp_table", []):
@@ -332,7 +359,7 @@ class ConnectionMapper:
             if conn.get("type") == "host_connection"
         ]
     
-    def save_map(self, filename: str, connection_map: Dict = None):
+    def save_map(self, filename: str, connection_map: Dict = None) -> bool:
         """
         Save connection map to a JSON file.
         
@@ -350,8 +377,10 @@ class ConnectionMapper:
             with open(filename, 'w') as f:
                 json.dump(connection_map, f, indent=2, default=str)
             logger.info(f"Connection map saved to {filename}")
+            return True
         except Exception as e:
             logger.error(f"Failed to save connection map to {filename}: {e}")
+            return False
     
     def generate_readable_output(self) -> List[str]:
         """
@@ -407,6 +436,7 @@ class ConnectionMapper:
 def main():
     """Example usage of the ConnectionMapper."""
     import argparse
+    import sys
     
     parser = argparse.ArgumentParser(description="Build connection map from collected Mikrotik data")
     parser.add_argument("input_file", help="JSON file with collected device data")
@@ -419,7 +449,9 @@ def main():
     mapper = ConnectionMapper()
     
     # Load data
-    mapper.load_data(args.input_file)
+    if mapper.load_data(args.input_file) is None:
+        print(f"Failed to load device data from {args.input_file}")
+        sys.exit(1)
     
     # Build connection map
     connection_map = mapper.build_connection_map()

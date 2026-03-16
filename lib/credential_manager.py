@@ -96,7 +96,7 @@ class CredentialManager:
         """
         if not os.path.exists(self.credentials_file):
             logger.info("No existing credentials file found")
-            return self.set_master_password(master_password)
+            return False
         
         if not master_password:
             master_password = getpass.getpass("Enter master password to access credentials: ")
@@ -126,6 +126,31 @@ class CredentialManager:
         except Exception as e:
             logger.error(f"Authentication failed: {e}")
             return False
+
+    def has_usable_store(self) -> bool:
+        """Return True when the credential store has salt plus encrypted payload."""
+        try:
+            return (
+                os.path.exists(self.credentials_file)
+                and os.path.getsize(self.credentials_file) > 16
+            )
+        except OSError:
+            return False
+
+    def prepare_for_storage(self, master_password: str = None) -> bool:
+        """
+        Unlock an existing credential store or initialize a new one.
+
+        Args:
+            master_password (str, optional): Master password. If not provided,
+                the user will be prompted.
+
+        Returns:
+            bool: True if the store is ready for writes, False otherwise
+        """
+        if self.has_usable_store():
+            return self.authenticate(master_password)
+        return self.set_master_password(master_password)
     
     def store_credentials(self, hostname: str, username: str, password: str = None, 
                          key_file: str = None) -> bool:
@@ -324,9 +349,9 @@ def main():
             print("Hostname and username required for storing credentials")
             return
         
-        # Authenticate first
-        if not cred_manager.authenticate():
-            print("Authentication failed")
+        # Unlock the existing store or initialize a new one
+        if not cred_manager.prepare_for_storage():
+            print("Failed to unlock credential store")
             return
         
         # Store credentials

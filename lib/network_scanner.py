@@ -206,7 +206,11 @@ class NetworkScanner:
         
         # Save to file if requested
         if save_to_file:
-            self.save_results(mikrotik_devices, save_to_file)
+            if not self.save_results(mikrotik_devices, save_to_file):
+                logger.error(
+                    f"Aborting scan results because they could not be saved to {save_to_file}"
+                )
+                return []
             
         return mikrotik_devices
     
@@ -226,7 +230,7 @@ class NetworkScanner:
         except Exception:
             return ""
     
-    def save_results(self, devices: List[Dict], filename: str):
+    def save_results(self, devices: List[Dict], filename: str) -> bool:
         """
         Save scan results to a JSON file.
         
@@ -241,8 +245,10 @@ class NetworkScanner:
             with open(filename, 'w') as f:
                 json.dump(devices, f, indent=2)
             logger.info(f"Results saved to {filename}")
+            return True
         except Exception as e:
             logger.error(f"Failed to save results to {filename}: {e}")
+            return False
 
 def main():
     """Main function for command-line usage."""

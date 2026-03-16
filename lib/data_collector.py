@@ -55,6 +55,8 @@ class DataCollector:
     def _create_client(self, hostname: str, port: int, timeout: int):
         """Create a backend client for a single device."""
         client_class = self.CLIENTS[self.backend]
+        if port is None:
+            port = 8728 if self.backend == "api" else 22
         kwargs = {
             "hostname": hostname,
             "username": self.username,
@@ -67,7 +69,7 @@ class DataCollector:
             kwargs["use_ssl"] = self.use_ssl
         return client_class(**kwargs)
     
-    def collect_from_device(self, hostname: str, port: int = 22, timeout: int = 10) -> Dict:
+    def collect_from_device(self, hostname: str, port: int = None, timeout: int = 10) -> Dict:
         """
         Collect data from a single Mikrotik device.
         
@@ -139,7 +141,7 @@ class DataCollector:
         
         return device_data
     
-    def collect_from_devices(self, hostnames: List[str], port: int = 22, timeout: int = 10) -> Dict:
+    def collect_from_devices(self, hostnames: List[str], port: int = None, timeout: int = 10) -> Dict:
         """
         Collect data from multiple Mikrotik devices sequentially.
         
@@ -164,7 +166,7 @@ class DataCollector:
         self.collected_data = all_data
         return all_data
     
-    def save_data(self, filename: str, data: Dict = None):
+    def save_data(self, filename: str, data: Dict = None) -> bool:
         """
         Save collected data to a JSON file.
         
@@ -182,8 +184,10 @@ class DataCollector:
             with open(filename, 'w') as f:
                 json.dump(data, f, indent=2, default=str)
             logger.info(f"Data saved to {filename}")
+            return True
         except Exception as e:
             logger.error(f"Failed to save data to {filename}: {e}")
+            return False
     
     def load_data(self, filename: str) -> Dict:
         """
@@ -215,7 +219,12 @@ def main():
     parser.add_argument("-p", "--password", help="Device password")
     parser.add_argument("-k", "--key-file", help="Private key file")
     parser.add_argument("-o", "--output", help="Output file for collected data")
-    parser.add_argument("--port", type=int, default=8728, help="Backend port (default: 8728)")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Backend port (default: 8728 for api, 22 for ssh)",
+    )
     parser.add_argument(
         "--backend",
         choices=sorted(DataCollector.CLIENTS),

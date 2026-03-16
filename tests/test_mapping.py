@@ -7,6 +7,7 @@ import sys
 import os
 import tempfile
 import json
+from unittest.mock import patch
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -72,7 +73,7 @@ def test_save_and_load_map():
     
     try:
         # Save map
-        mapper.save_map(temp_file, sample_map)
+        assert mapper.save_map(temp_file, sample_map) is True
         
         # Create new mapper and load data
         new_mapper = ConnectionMapper()
@@ -123,6 +124,26 @@ def test_generate_readable_output():
     assert "ether1 on router1 is connected to device with MAC 00:11:22:33:44:55" in descriptions
     assert "ether2 on router1 is connected to host host1" in descriptions
     print("✓ generate_readable_output test passed")
+
+
+def test_connection_mapper_cli_exits_non_zero_on_load_failure():
+    """Standalone connection-mapper CLI should fail on unreadable input."""
+    import lib.connection_mapper as connection_mapper_module
+
+    original_argv = sys.argv[:]
+    sys.argv = ["connection_mapper.py", "missing.json"]
+
+    try:
+        with patch.object(ConnectionMapper, "load_data", return_value=None):
+            try:
+                connection_mapper_module.main()
+                raise AssertionError("main() should have exited")
+            except SystemExit as exc:
+                assert exc.code == 1
+    finally:
+        sys.argv = original_argv
+
+    print("✓ connection mapper CLI exit-code test passed")
 
 def test_generate_readable_output_uses_host_metadata_for_bridge_ports():
     """Test readable bridge-port output falls back to host metadata."""
@@ -234,6 +255,41 @@ def test_managed_devices_are_not_added_as_hosts():
     assert host_connections[0]["destination_host"] == "host1"
     print("✓ managed device host suppression test passed")
 
+
+def test_duplicate_identities_get_unique_device_labels():
+    """Duplicate RouterOS identities should not collapse devices in the map."""
+    mapper = ConnectionMapper()
+
+    mapper.set_data({
+        "192.168.1.1": {
+            "hostname": "192.168.1.1",
+            "connected": True,
+            "device_info": {"identity": "router"},
+            "interfaces": [{"name": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"}],
+            "bridge_ports": [],
+            "bridge_hosts": [],
+            "arp_table": [],
+            "dhcp_leases": [],
+        },
+        "192.168.1.2": {
+            "hostname": "192.168.1.2",
+            "connected": True,
+            "device_info": {"identity": "router"},
+            "interfaces": [{"name": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"}],
+            "bridge_ports": [],
+            "bridge_hosts": [],
+            "arp_table": [],
+            "dhcp_leases": [],
+        },
+    })
+
+    connection_map = mapper.build_connection_map()
+
+    assert "router (192.168.1.1)" in connection_map["devices"]
+    assert "router (192.168.1.2)" in connection_map["devices"]
+    assert len(connection_map["devices"]) == 2
+    print("✓ duplicate identity device labels test passed")
+
 def main():
     """Run all mapping tests."""
     print("Running Connection Mapper Tests...")
@@ -243,9 +299,11 @@ def main():
         test_set_and_load_data()
         test_save_and_load_map()
         test_generate_readable_output()
+        test_connection_mapper_cli_exits_non_zero_on_load_failure()
         test_generate_readable_output_uses_host_metadata_for_bridge_ports()
         test_host_connections_use_bridge_host_interface()
         test_managed_devices_are_not_added_as_hosts()
+        test_duplicate_identities_get_unique_device_labels()
         
         print("\nAll Connection Mapper tests passed! ✓")
         return 0

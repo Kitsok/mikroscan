@@ -47,7 +47,17 @@ class MikrotikMapper:
             "password": password,
             "key_file": None,
         }
-        
+
+    def _has_connected_devices(self, collected_data: dict) -> bool:
+        """Return True when at least one collected device connected successfully."""
+        if not isinstance(collected_data, dict):
+            return False
+
+        return any(
+            isinstance(device_data, dict) and device_data.get("connected", False)
+            for device_data in collected_data.values()
+        )
+
     def scan_network(self, ip_range: str, output_file: str = "data/mikrotik_devices.json", 
                      timeout: int = 5, verbose: bool = False) -> List[dict]:
         """
@@ -83,7 +93,7 @@ class MikrotikMapper:
             password (str, optional): SSH password
             key_file (str, optional): Private key file
             output_file (str): File to save collected data
-            port (int): Backend port
+            port (int): Requested backend port
             timeout (int): Connection timeout
             backend (str): Collection backend
             use_api_ssl (bool): Use TLS with the RouterOS API backend
@@ -102,12 +112,34 @@ class MikrotikMapper:
             return {}
         
         # Extract hostnames/IPs
-        hostnames = [device["ip"] for device in devices]
+        hostnames = []
+        for device in devices:
+            if not isinstance(device, dict):
+                logger.error(f"Invalid device entry in {device_file}: {device}")
+                return {}
+            endpoint = device.get("ip") or device.get("hostname")
+            if not endpoint:
+                logger.error(f"Invalid device entry in {device_file}: {device}")
+                return {}
+            hostnames.append(endpoint)
         logger.info(f"Collecting data from {len(hostnames)} devices")
+
+        if not hostnames:
+            logger.warning(f"No devices found in {device_file}")
+            self.collector = DataCollector(
+                username=username or "",
+                password=password,
+                key_filename=key_file,
+                backend=backend,
+                use_ssl=use_api_ssl if backend == "api" else False,
+            )
+            if not self.collector.save_data(output_file, {}):
+                logger.error(f"Failed to save empty collection output to {output_file}")
+            return {}
         
         # If no username provided, try to get stored credentials
         if not username:
-            credentials_file_exists = os.path.exists(self.credential_manager.credentials_file)
+            credentials_file_exists = self.credential_manager.has_usable_store()
             prompted_credentials = None
 
             if credentials_file_exists and not self.credential_manager.cipher_suite:
@@ -137,36 +169,64 @@ class MikrotikMapper:
                         return {}
 
                     cred_data = prompted_credentials
+
+                if (
+                    backend == "api"
+                    and cred_data.get("key_file")
+                    and not cred_data.get("password")
+                ):
+                    logger.error(
+                        "Stored credentials for %s only provide SSH key auth, "
+                        "but the RouterOS API backend requires a password",
+                        hostname,
+                    )
+                    return {}
                 
-                # Create data collector with stored credentials
                 self.collector = DataCollector(
                     username=cred_data.get("username", ""),
                     password=cred_data.get("password"),
                     key_filename=cred_data.get("key_file"),
                     backend=backend,
-                    use_ssl=use_api_ssl,
+                    use_ssl=use_api_ssl if backend == "api" else False,
                 )
-                
+
                 # Collect data from this device
-                device_data = self.collector.collect_from_device(hostname, port, timeout)
+                device_data = self.collector.collect_from_device(
+                    hostname,
+                    port,
+                    timeout,
+                )
                 all_data[hostname] = device_data
             
             data = all_data
         else:
+            if backend == "api" and key_file and not password:
+                logger.error(
+                    "The RouterOS API backend requires a password; "
+                    "SSH key-only credentials are not supported"
+                )
+                return {}
+
             # Create data collector with provided credentials
             self.collector = DataCollector(
                 username=username,
                 password=password,
                 key_filename=key_file,
                 backend=backend,
-                use_ssl=use_api_ssl,
+                use_ssl=use_api_ssl if backend == "api" else False,
             )
-            
+
             # Collect data
-            data = self.collector.collect_from_devices(hostnames, port, timeout)
+            data = self.collector.collect_from_devices(
+                hostnames,
+                port,
+                timeout,
+            )
         
         # Save data
-        self.collector.save_data(output_file, data)
+        if not self.collector.save_data(output_file, data):
+            logger.error(f"Failed to save collected data to {output_file}")
+            return {}
         
         logger.info("Data collection complete")
         return data
@@ -185,16 +245,24 @@ class MikrotikMapper:
             dict: Connection map
         """
         logger.info(f"Building connection map from {data_file}")
+        if not os.path.exists(data_file):
+            logger.error(f"Collected data file does not exist: {data_file}")
+            return {}
         
         # Create connection mapper
         self.mapper = ConnectionMapper()
         
         # Load data and build map
-        self.mapper.load_data(data_file)
+        loaded_data = self.mapper.load_data(data_file)
+        if loaded_data is None:
+            logger.error(f"Failed to load collected data from {data_file}")
+            return {}
         connection_map = self.mapper.build_connection_map()
         
         # Save JSON map
-        self.mapper.save_map(output_file, connection_map)
+        if not self.mapper.save_map(output_file, connection_map):
+            logger.error(f"Failed to save connection map output to {output_file}")
+            return {}
         
         # Generate and save readable output
         descriptions = self.mapper.generate_readable_output()
@@ -208,6 +276,7 @@ class MikrotikMapper:
             logger.info(f"Readable connection descriptions saved to {readable_file}")
         except Exception as e:
             logger.error(f"Failed to save readable output to {readable_file}: {e}")
+            return {}
         
         logger.info("Connection map building complete")
         return connection_map
@@ -234,7 +303,10 @@ class MikrotikMapper:
     def run_full_mapping(self, ip_range: str, username: str = None, password: str = None,
                          key_file: str = None, port: int = 8728, timeout: int = 5,
                          verbose: bool = False, backend: str = "api",
-                         use_api_ssl: bool = False) -> dict:
+                         use_api_ssl: bool = False,
+                         output_file: str = "data/final_map.json",
+                         readable_file: str = "data/connections.txt",
+                         topology_file: str = "data/topology.txt") -> dict:
         """
         Run complete network mapping workflow.
         
@@ -243,11 +315,14 @@ class MikrotikMapper:
             username (str): SSH username
             password (str, optional): SSH password
             key_file (str, optional): Private key file
-            port (int): Backend port
+            port (int): Requested backend port
             timeout (int): Timeout for operations
             verbose (bool): Enable verbose output
             backend (str): Collection backend
             use_api_ssl (bool): Use TLS with the RouterOS API backend
+            output_file (str): File to save connection map (JSON)
+            readable_file (str): File to save human-readable connections
+            topology_file (str): File to save generated topology
             
         Returns:
             dict: Final connection map
@@ -278,14 +353,30 @@ class MikrotikMapper:
             backend=backend,
             use_api_ssl=use_api_ssl,
         )
+
+        if not self._has_connected_devices(data):
+            logger.warning("No device data collected. Exiting.")
+            return {}
         
         # Step 3: Build map
         connection_map = self.build_map(
             data_file="data/collected_data.json",
-            output_file="data/final_map.json",
-            readable_file="data/connections.txt"
+            output_file=output_file,
+            readable_file=readable_file
         )
-        
+        if not connection_map:
+            logger.warning("Connection map generation failed. Exiting.")
+            return {}
+
+        topology_generated = self.generate_topology(
+            data_file=DEFAULT_DATA_FILE,
+            output_file=topology_file,
+        )
+
+        if not topology_generated:
+            logger.warning("Full network mapping completed without topology output")
+            return {}
+
         logger.info("Full network mapping workflow complete")
         return connection_map
     
@@ -469,13 +560,15 @@ Examples:
         
         # Create credential manager and store credentials
         cred_manager = CredentialManager()
-        if cred_manager.set_master_password():
+        if cred_manager.prepare_for_storage():
             if cred_manager.store_credentials(args.hostname, username, password, args.key_file):
                 print(f"Credentials for {args.hostname} stored successfully")
             else:
                 print(f"Failed to store credentials for {args.hostname}")
+                sys.exit(1)
         else:
-            print("Failed to set master password")
+            print("Failed to unlock credential store")
+            sys.exit(1)
         return
     
     # Handle default credential storage
@@ -494,42 +587,38 @@ Examples:
         
         # Create credential manager and store default credentials
         cred_manager = CredentialManager()
-        if cred_manager.set_master_password():
+        if cred_manager.prepare_for_storage():
             if cred_manager.store_default_credentials(username, password, args.key_file):
                 print("Default credentials stored successfully")
             else:
                 print("Failed to store default credentials")
+                sys.exit(1)
         else:
-            print("Failed to set master password")
+            print("Failed to unlock credential store")
+            sys.exit(1)
         return
     
     # Handle topology generation (doesn't need authentication)
     if args.generate_topology:
         mapper = MikrotikMapper()
         logger.info("Generating network topology")
-        mapper.generate_topology(
+        if not mapper.generate_topology(
             data_file=args.data_file or DEFAULT_DATA_FILE,
             output_file="data/topology.txt"
-        )
+        ):
+            sys.exit(1)
         return
     
     # Create mapper
     mapper = MikrotikMapper()
 
     needs_live_collection = bool(args.ip_range or args.scan_file)
-
-    # Authenticate only for operations that need live device collection
-    if needs_live_collection and not args.username and not args.password and not args.key_file:
-        # Try to authenticate with master password to use stored credentials
-        if not mapper.credential_manager.authenticate():
-            print("Authentication failed. Cannot access stored credentials.")
-            sys.exit(1)
-    
     # Get password if needed and not provided
     if needs_live_collection and args.username and not args.password and not args.key_file:
         args.password = getpass.getpass("Device Password: ")
 
     collection_port = args.api_port if args.backend == "api" else args.ssh_port
+    connection_map = {}
     
     try:
         if args.scan_file:
@@ -547,16 +636,22 @@ Examples:
                 use_api_ssl=args.api_ssl,
             )
             
-            if collected_data:
+            if mapper._has_connected_devices(collected_data):
                 connection_map = mapper.build_map(
                     data_file=DEFAULT_DATA_FILE,
                     output_file=args.output,
                     readable_file=args.readable_output
                 )
-                mapper.generate_topology(
+                if not connection_map:
+                    sys.exit(1)
+                if not mapper.generate_topology(
                     data_file=DEFAULT_DATA_FILE,
                     output_file="data/topology.txt"
-                )
+                ):
+                    sys.exit(1)
+            else:
+                logger.warning("No data collected from scan file input")
+                sys.exit(1)
 
         elif args.ip_range:
             # Run full workflow
@@ -571,7 +666,12 @@ Examples:
                 verbose=args.verbose,
                 backend=args.backend,
                 use_api_ssl=args.api_ssl,
+                output_file=args.output,
+                readable_file=args.readable_output,
+                topology_file="data/topology.txt",
             )
+            if not connection_map:
+                sys.exit(1)
 
         else:
             # Directly build map from existing data
@@ -582,6 +682,8 @@ Examples:
                 output_file=args.output,
                 readable_file=args.readable_output
             )
+            if not connection_map:
+                sys.exit(1)
         
         # Display summary
         if connection_map and "devices" in connection_map:

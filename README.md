@@ -112,7 +112,7 @@ Enable API TLS explicitly:
 python3 main.py --scan-file --backend api --api-port 8729 --api-ssl
 ```
 
-### SSH fallback
+### Explicit SSH backend
 
 ```bash
 python3 main.py --scan-file --backend ssh --ssh-port 22

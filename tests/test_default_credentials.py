@@ -5,6 +5,7 @@ Test for default credential functionality.
 
 import sys
 import os
+import base64
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -16,13 +17,14 @@ from lib.credential_manager import CredentialManager
 class TestDefaultCredentials(unittest.TestCase):
     """Test default credential functionality."""
     
-    @patch('credential_manager.CredentialManager._save_encrypted_credentials')
-    @patch('credential_manager.CredentialManager.load_all_credentials')
+    @patch('lib.credential_manager.CredentialManager._save_encrypted_credentials')
+    @patch('lib.credential_manager.CredentialManager.load_all_credentials')
     def test_store_default_credentials(self, mock_load, mock_save):
         """Test storing default credentials."""
         # Mock credential manager
         cred_manager = CredentialManager()
         cred_manager.cipher_suite = MagicMock()
+        cred_manager.cipher_suite.encrypt.return_value = b"encrypted-default"
         
         # Mock load to return empty dict
         mock_load.return_value = {}
@@ -32,21 +34,22 @@ class TestDefaultCredentials(unittest.TestCase):
         
         # Test storing default credentials
         result = cred_manager.store_default_credentials("admin", "password123")
-        
+
         # Verify the call was made
+        self.assertTrue(result)
         self.assertTrue(mock_save.called)
         print("✓ Default credentials storage test passed")
     
-    @patch('credential_manager.CredentialManager.load_all_credentials')
-    def test_retrieve_default_credentials_fallback(self, mock_load):
-        """Test retrieving default credentials as fallback."""
+    @patch('lib.credential_manager.CredentialManager.load_all_credentials')
+    def test_retrieve_default_credentials_from_default_entry(self, mock_load):
+        """Test retrieving credentials from the default entry."""
         # Mock credential manager
         cred_manager = CredentialManager()
         cred_manager.cipher_suite = MagicMock()
         
         # Mock load to return only default credentials
         mock_load.return_value = {
-            "__default__": "encrypted_default_data"
+            "__default__": base64.b64encode(b"encrypted_default_data").decode()
         }
         
         # Mock cipher suite decryption
@@ -59,9 +62,9 @@ class TestDefaultCredentials(unittest.TestCase):
         # Verify default credentials were returned
         self.assertEqual(result["username"], "admin")
         self.assertEqual(result["password"], "defaultpass")
-        print("✓ Default credentials fallback test passed")
+        print("✓ Default credentials retrieval test passed")
     
-    @patch('credential_manager.CredentialManager.load_all_credentials')
+    @patch('lib.credential_manager.CredentialManager.load_all_credentials')
     def test_retrieve_host_specific_over_default(self, mock_load):
         """Test that host-specific credentials take precedence over default."""
         # Mock credential manager
@@ -70,8 +73,8 @@ class TestDefaultCredentials(unittest.TestCase):
         
         # Mock load to return both host-specific and default credentials
         mock_load.return_value = {
-            "192.168.1.100": "encrypted_host_data",
-            "__default__": "encrypted_default_data"
+            "192.168.1.100": base64.b64encode(b"encrypted_host_data").decode(),
+            "__default__": base64.b64encode(b"encrypted_default_data").decode()
         }
         
         # Mock cipher suite decryption for host-specific credentials

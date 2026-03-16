@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import lib.data_collector as data_collector_module
 from lib.data_collector import DataCollector
 
 
@@ -78,6 +79,14 @@ class TestDataCollector(unittest.TestCase):
         self.assertIsNone(collector.key_filename)
         self.assertEqual(collector.backend, "api")
 
+    @patch.dict("lib.data_collector.DataCollector.CLIENTS", {"api": FakeAPIClient}, clear=False)
+    def test_collect_from_device_defaults_to_api_port(self):
+        collector = DataCollector(username="admin", password="password", backend="api")
+        result = collector.collect_from_device("192.168.1.1")
+
+        self.assertTrue(result["connected"])
+        self.assertEqual(collector._create_client("192.168.1.1", None, 10).kwargs["port"], 8728)
+
     @patch.dict("lib.data_collector.DataCollector.CLIENTS", {"ssh": FakeSSHClient}, clear=False)
     def test_collect_from_device_collects_all_sections(self):
         collector = DataCollector(username="admin", password="password", backend="ssh")
@@ -143,12 +152,30 @@ class TestDataCollector(unittest.TestCase):
             temp_file = handle.name
 
         try:
-            collector.save_data(temp_file, sample_data)
+            self.assertTrue(collector.save_data(temp_file, sample_data))
             loaded_data = collector.load_data(temp_file)
             self.assertEqual(loaded_data["192.168.1.1"]["device_info"]["identity"], "router1")
         finally:
             if os.path.exists(temp_file):
                 os.unlink(temp_file)
+
+    @patch.object(data_collector_module.DataCollector, "collect_from_devices", return_value={})
+    def test_cli_ssh_backend_defaults_port_to_none(self, mock_collect):
+        with patch.object(sys, "argv", [
+            "data_collector.py",
+            "192.168.1.1",
+            "--backend",
+            "ssh",
+            "-u",
+            "admin",
+        ]):
+            data_collector_module.main()
+
+        mock_collect.assert_called_once_with(
+            ["192.168.1.1"],
+            None,
+            10,
+        )
 
 
 if __name__ == "__main__":

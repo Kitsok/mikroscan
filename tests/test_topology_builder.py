@@ -5,6 +5,8 @@ import json
 import os
 import sys
 import tempfile
+from builtins import open as builtin_open
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -628,6 +630,178 @@ def test_generate_topology_output_marks_device_plus_single_host_as_shared_segmen
     print("✓ device-plus-single-host shared segment test passed")
 
 
+def test_duplicate_identities_render_as_distinct_topology_nodes():
+    """Duplicate managed identities should remain distinct in topology output."""
+    builder = TopologyBuilder()
+    builder.devices_data = {
+        "1.1.1.1": {
+            "hostname": "1.1.1.1",
+            "connected": True,
+            "device_info": {"identity": "Router"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+            ],
+            "dhcp_leases": [],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "1.1.1.1/24"}],
+            "neighbors": [],
+        },
+        "2.2.2.2": {
+            "hostname": "2.2.2.2",
+            "connected": True,
+            "device_info": {"identity": "Router"},
+            "interfaces": [
+                {"name": "ether1", "mac_address": "BB:BB:BB:BB:BB:01"},
+            ],
+            "bridge_hosts": [
+                {"interface": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"},
+            ],
+            "dhcp_leases": [],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [{"address": "2.2.2.2/24"}],
+            "neighbors": [],
+        },
+    }
+
+    builder.build_mac_name_map()
+    builder.build_mac_ip_map()
+    builder.build_ip_name_map()
+    builder.build_mac_port_map()
+
+    with tempfile.NamedTemporaryFile(mode="r", delete=False) as handle:
+        output_file = handle.name
+
+    try:
+        builder.generate_topology_output(output_file)
+        with open(output_file, "r") as handle:
+            output = handle.read()
+    finally:
+        if os.path.exists(output_file):
+            os.unlink(output_file)
+
+    assert "Router (1.1.1.1)" in output
+    assert "Router (2.2.2.2)" in output
+    print("✓ duplicate identity topology test passed")
+
+
+def test_reused_builder_resets_derived_maps_between_datasets():
+    """Reusing one TopologyBuilder should not leak stale derived state."""
+    builder = TopologyBuilder()
+
+    builder.devices_data = {
+        "1.1.1.1": {
+            "hostname": "1.1.1.1",
+            "connected": True,
+            "device_info": {"identity": "First"},
+            "interfaces": [{"name": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"}],
+            "bridge_hosts": [{"interface": "ether1", "mac_address": "CC:CC:CC:CC:CC:01"}],
+            "dhcp_leases": [{"mac_address": "CC:CC:CC:CC:CC:01", "active_address": "10.0.0.10", "host_name": "host-a"}],
+            "dns_static": [{"address": "10.0.0.10", "name": "host-a"}],
+            "arp_table": [],
+            "ip_addresses": [{"address": "1.1.1.1/24"}],
+            "neighbors": [],
+        },
+    }
+    builder.build_mac_name_map()
+    builder.build_mac_ip_map()
+    builder.build_ip_name_map()
+    builder.build_mac_port_map()
+
+    builder.devices_data = {
+        "2.2.2.2": {
+            "hostname": "2.2.2.2",
+            "connected": True,
+            "device_info": {"identity": "Second"},
+            "interfaces": [{"name": "ether2", "mac_address": "BB:BB:BB:BB:BB:01"}],
+            "bridge_hosts": [{"interface": "ether2", "mac_address": "DD:DD:DD:DD:DD:01"}],
+            "dhcp_leases": [{"mac_address": "DD:DD:DD:DD:DD:01", "active_address": "10.0.1.10", "host_name": "host-b"}],
+            "dns_static": [{"address": "10.0.1.10", "name": "host-b"}],
+            "arp_table": [],
+            "ip_addresses": [{"address": "2.2.2.2/24"}],
+            "neighbors": [],
+        },
+    }
+    builder.build_mac_name_map()
+    builder.build_mac_ip_map()
+    builder.build_ip_name_map()
+    builder.build_mac_port_map()
+
+    assert "AA:AA:AA:AA:AA:01" not in builder.mac_name_map
+    assert "CC:CC:CC:CC:CC:01" not in builder.mac_ip_map
+    assert "10.0.0.10" not in builder.ip_name_map
+    assert "CC:CC:CC:CC:CC:01" not in builder.mac_port_map
+    assert builder.mac_name_map["BB:BB:BB:BB:BB:01"] == "Second"
+    assert builder.mac_ip_map["DD:DD:DD:DD:DD:01"] == "10.0.1.10"
+    assert builder.ip_name_map["10.0.1.10"] == "host-b"
+    assert builder.mac_port_map["DD:DD:DD:DD:DD:01"]["port"] == "ether2"
+    print("✓ builder reuse state reset test passed")
+
+
+def test_build_complete_topology_fails_when_output_write_fails():
+    """Topology build should fail when the output file cannot be written."""
+    builder = TopologyBuilder()
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False) as handle:
+        json.dump(
+            {
+                "1.1.1.1": {
+                    "hostname": "1.1.1.1",
+                    "connected": True,
+                    "device_info": {"identity": "Root"},
+                    "interfaces": [{"name": "ether1", "mac_address": "AA:AA:AA:AA:AA:01"}],
+                    "bridge_hosts": [],
+                    "dhcp_leases": [],
+                    "dns_static": [],
+                    "arp_table": [],
+                    "ip_addresses": [],
+                    "neighbors": [],
+                }
+            },
+            handle,
+        )
+        input_file = handle.name
+
+    try:
+        def fail_only_on_output(path, mode="r", *args, **kwargs):
+            if path == "data/topology.txt" and "w" in mode:
+                raise OSError("disk full")
+            return builtin_open(path, mode, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=fail_only_on_output):
+            result = builder.build_complete_topology(input_file, "data/topology.txt")
+    finally:
+        if os.path.exists(input_file):
+            os.unlink(input_file)
+
+    assert result is False
+    print("✓ topology output write failure test passed")
+
+
+def test_topology_builder_cli_exits_non_zero_on_failure():
+    """Standalone topology CLI should fail the process on build errors."""
+    import lib.topology_builder as topology_builder_module
+
+    original_argv = sys.argv[:]
+    sys.argv = ["topology_builder.py", "missing.json"]
+
+    try:
+        with patch.object(TopologyBuilder, "build_complete_topology", return_value=False):
+            try:
+                topology_builder_module.main()
+                raise AssertionError("main() should have exited")
+            except SystemExit as exc:
+                assert exc.code == 1
+    finally:
+        sys.argv = original_argv
+
+    print("✓ topology builder CLI exit-code test passed")
+
+
 def main():
     """Run topology builder tests."""
     print("Running Topology Builder Tests...")
@@ -638,6 +812,10 @@ def main():
         test_generate_topology_output_marks_multi_device_ports_as_shared_segments()
         test_generate_topology_output_marks_device_plus_hosts_as_shared_segment()
         test_generate_topology_output_marks_device_plus_single_host_as_shared_segment()
+        test_duplicate_identities_render_as_distinct_topology_nodes()
+        test_reused_builder_resets_derived_maps_between_datasets()
+        test_build_complete_topology_fails_when_output_write_fails()
+        test_topology_builder_cli_exits_non_zero_on_failure()
         print("\nAll Topology Builder tests passed! ✓")
         return 0
     except Exception as exc:

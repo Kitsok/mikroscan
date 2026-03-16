@@ -40,12 +40,16 @@ class FakePool:
     def __init__(self, api):
         self.api = api
         self.disconnected = False
+        self.timeout = None
 
     def get_api(self):
         return self.api
 
     def disconnect(self):
         self.disconnected = True
+
+    def set_timeout(self, timeout):
+        self.timeout = timeout
 
 
 class TestMikrotikAPIClient(unittest.TestCase):
@@ -80,6 +84,7 @@ class TestMikrotikAPIClient(unittest.TestCase):
             username="admin",
             password="password",
             port=8729,
+            timeout=7,
             use_ssl=True,
         )
 
@@ -94,6 +99,7 @@ class TestMikrotikAPIClient(unittest.TestCase):
             use_ssl=True,
             plaintext_login=False,
         )
+        self.assertEqual(fake_pool.timeout, 7)
         self.assertEqual(info["identity"], "router1")
         self.assertEqual(info["model"], "RB5009")
 

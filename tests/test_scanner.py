@@ -7,6 +7,7 @@ import sys
 import os
 import tempfile
 import json
+from unittest.mock import patch
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -51,7 +52,7 @@ def test_save_results():
     
     try:
         # Save results
-        scanner.save_results(devices, temp_file)
+        assert scanner.save_results(devices, temp_file) is True
         
         # Verify file was created and contains valid JSON
         with open(temp_file, 'r') as f:
@@ -66,6 +67,32 @@ def test_save_results():
         if os.path.exists(temp_file):
             os.unlink(temp_file)
 
+
+def test_scan_for_mikrotik_devices_returns_empty_when_save_fails():
+    """Saving scan results must not fall through to stale on-disk results."""
+    scanner = NetworkScanner()
+
+    with patch.object(scanner, "scan_range", return_value=["192.168.1.1"]), patch.object(
+        scanner,
+        "identify_mikrotik",
+        return_value=True,
+    ), patch.object(
+        scanner,
+        "get_hostname",
+        return_value="router1",
+    ), patch.object(
+        scanner,
+        "save_results",
+        return_value=False,
+    ):
+        result = scanner.scan_for_mikrotik_devices(
+            "192.168.1.0/24",
+            "data/scan_results.json",
+        )
+
+    assert result == []
+    print("✓ scan results save-failure test passed")
+
 def main():
     """Run all scanner tests."""
     print("Running Network Scanner Tests...")
@@ -75,6 +102,7 @@ def main():
         test_ping_host()
         test_get_hostname()
         test_save_results()
+        test_scan_for_mikrotik_devices_returns_empty_when_save_fails()
         
         print("\nAll Network Scanner tests passed! ✓")
         return 0

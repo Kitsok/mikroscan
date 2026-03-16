@@ -58,6 +58,7 @@ class MikrotikAPIClient:
                 use_ssl=self.use_ssl,
                 plaintext_login=not self.use_ssl,
             )
+            self.pool.set_timeout(self.timeout)
             self.api = self.pool.get_api()
             self.connected = True
             logger.info(f"Successfully connected to {self.hostname} via RouterOS API")

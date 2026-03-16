@@ -23,12 +23,49 @@ class TopologyBuilder:
         self.mac_ip_map = {}
         self.ip_name_map = {}
         self.mac_port_map = {}
+        self.device_label_map = {}
 
     def _clean_name(self, name: str) -> str:
         """Normalize display names parsed from RouterOS output."""
         if not name:
             return ""
         return name.strip().strip('"').strip()
+
+    def _build_device_label_map(self) -> Dict[str, str]:
+        """Build stable per-host labels, disambiguating duplicate identities."""
+        identity_counts = defaultdict(int)
+        identities = {}
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            identity = self._clean_name(
+                device_data.get("device_info", {}).get("identity", hostname)
+            ) or hostname
+            identities[hostname] = identity
+            identity_counts[identity] += 1
+
+        labels = {}
+        for hostname, identity in identities.items():
+            if identity_counts[identity] > 1:
+                labels[hostname] = f"{identity} ({hostname})"
+            else:
+                labels[hostname] = identity
+
+        self.device_label_map = labels
+        return labels
+
+    def _get_device_label(self, hostname: str, device_data: Dict[str, Any]) -> str:
+        """Return the stable label for a managed device."""
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        return self.device_label_map.get(
+            hostname,
+            self._clean_name(device_data.get("device_info", {}).get("identity", hostname))
+            or hostname,
+        )
 
     def _build_known_device_maps(self):
         """
@@ -41,13 +78,14 @@ class TopologyBuilder:
         device_name_map = {}
         device_ip_map = {}
 
+        if not self.device_label_map:
+            self._build_device_label_map()
+
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
                 continue
 
-            device_name = self._clean_name(
-                device_data.get("device_info", {}).get("identity", hostname)
-            )
+            device_name = self._get_device_label(hostname, device_data)
             device_ip = device_data.get("hostname", hostname)
 
             for interface in device_data.get("interfaces", []):
@@ -67,13 +105,14 @@ class TopologyBuilder:
         """Build a mapping of managed device identity to management IP."""
         identity_ip_map = {}
 
+        if not self.device_label_map:
+            self._build_device_label_map()
+
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
                 continue
 
-            identity = self._clean_name(
-                device_data.get("device_info", {}).get("identity", hostname)
-            )
+            identity = self._get_device_label(hostname, device_data)
             management_ip = device_data.get("hostname", hostname)
             if identity and management_ip:
                 identity_ip_map[identity] = management_ip
@@ -84,13 +123,14 @@ class TopologyBuilder:
         """Build MAC-to-device-interface mapping for managed MikroTik ports."""
         interface_map = {}
 
+        if not self.device_label_map:
+            self._build_device_label_map()
+
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
                 continue
 
-            device_name = self._clean_name(
-                device_data.get("device_info", {}).get("identity", hostname)
-            )
+            device_name = self._get_device_label(hostname, device_data)
             device_ip = device_data.get("hostname", hostname)
 
             for interface in device_data.get("interfaces", []):
@@ -136,13 +176,14 @@ class TopologyBuilder:
         """Build a map of managed device names to their own interface MACs."""
         device_mac_sets = defaultdict(set)
 
+        if not self.device_label_map:
+            self._build_device_label_map()
+
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
                 continue
 
-            device_name = self._clean_name(
-                device_data.get("device_info", {}).get("identity", hostname)
-            )
+            device_name = self._get_device_label(hostname, device_data)
             for interface in device_data.get("interfaces", []):
                 mac = (
                     interface.get("mac_address")
@@ -468,13 +509,14 @@ class TopologyBuilder:
         """Build display labels for device ports including IP/MAC when known."""
         device_port_labels = {}
 
+        if not self.device_label_map:
+            self._build_device_label_map()
+
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
                 continue
 
-            device_name = self._clean_name(
-                device_data.get("device_info", {}).get("identity", hostname)
-            )
+            device_name = self._get_device_label(hostname, device_data)
             interfaces_by_name = self._get_interfaces_by_name(device_data)
             interface_ip_map = self._build_interface_ip_map(device_data)
             port_labels = {}
@@ -521,11 +563,14 @@ class TopologyBuilder:
         edge_routers = defaultdict(list)
         
         # Check each device's IP addresses
+        if not self.device_label_map:
+            self._build_device_label_map()
+
         for device_ip, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
                 continue
                 
-            device_name = device_data["device_info"].get("identity", device_ip)
+            device_name = self._get_device_label(device_ip, device_data)
             public_ips = []
             
             # Look through IP address information for public IPs
@@ -574,6 +619,8 @@ class TopologyBuilder:
         Priority: DNS > DHCP > Neighbors
         """
         logger.info("Building MAC-to-name mapping...")
+        self.mac_name_map = {}
+        self.device_label_map = {}
         
         # Temporary maps for each source
         device_map, _ = self._build_known_device_maps()
@@ -654,6 +701,8 @@ class TopologyBuilder:
     def build_mac_ip_map(self):
         """Build MAC-to-IP mapping from device, DHCP, and ARP data."""
         logger.info("Building MAC-to-IP mapping...")
+        self.mac_ip_map = {}
+        self.device_label_map = {}
 
         _, device_ip_map = self._build_known_device_maps()
         self.mac_ip_map.update(device_ip_map)
@@ -679,6 +728,7 @@ class TopologyBuilder:
     def build_ip_name_map(self):
         """Build IP-to-name mapping from DNS static entries."""
         logger.info("Building IP-to-name mapping...")
+        self.ip_name_map = {}
         
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
@@ -695,12 +745,16 @@ class TopologyBuilder:
     def build_mac_port_map(self):
         """Build MAC-to-physical port mapping from bridge host entries."""
         logger.info("Building MAC-to-port mapping...")
+        self.mac_port_map = {}
+        self.device_label_map = {}
         
+        self._build_device_label_map()
+
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
                 continue
                 
-            device_name = device_data["device_info"].get("identity", hostname)
+            device_name = self._get_device_label(hostname, device_data)
             
             for bridge_host in device_data.get("bridge_hosts", []):
                 mac = bridge_host.get("mac_address", "").upper()
@@ -723,13 +777,14 @@ class TopologyBuilder:
             defaultdict(lambda: defaultdict(dict))
         )
 
+        if not self.device_label_map:
+            self._build_device_label_map()
+
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
                 continue
 
-            device_name = self._clean_name(
-                device_data.get("device_info", {}).get("identity", hostname)
-            )
+            device_name = self._get_device_label(hostname, device_data)
 
             for bridge_host in device_data.get("bridge_hosts", []):
                 mac = bridge_host.get("mac_address", "").upper()
@@ -917,12 +972,18 @@ class TopologyBuilder:
             if remote_port:
                 label = f"<{remote_port}> {label}"
             if ip and ip != "Unknown IP":
-                return f"{label} ({ip}) [{mac}]"
+                return f"{self._format_managed_device_label(label, ip)} [{mac}]"
             return f"{label} [{mac}]"
 
         if ip and ip != "Unknown IP" and ip != label:
             return f"{label} ({ip}) [{mac}]"
         return f"{label} [{mac}]"
+
+    def _format_managed_device_label(self, device_name: str, ip: str) -> str:
+        """Format a managed device label without duplicating an embedded IP."""
+        if ip and ip != "Unknown IP" and not device_name.endswith(f" ({ip})"):
+            return f"{device_name} ({ip})"
+        return device_name
 
     def _get_child_prefix(self, endpoint_prefix: str, remote_port: str = "") -> str:
         """Align nested child-device ports with the child device name."""
@@ -938,13 +999,14 @@ class TopologyBuilder:
 
         candidates: Dict[str, Dict[str, Any]] = {}
 
+        if not self.device_label_map:
+            self._build_device_label_map()
+
         for hostname, device_data in self.devices_data.items():
             if not device_data.get("connected", False):
                 continue
 
-            device_name = self._clean_name(
-                device_data.get("device_info", {}).get("identity", hostname)
-            )
+            device_name = self._get_device_label(hostname, device_data)
 
             for bridge_host in device_data.get("bridge_hosts", []):
                 mac = (bridge_host.get("mac_address") or "").upper()
@@ -1142,7 +1204,7 @@ class TopologyBuilder:
 
         return lines
 
-    def generate_topology_output(self, output_file: str = "data/topology.txt"):
+    def generate_topology_output(self, output_file: str = "data/topology.txt") -> bool:
         """
         Generate the final rooted topology tree.
         
@@ -1150,18 +1212,18 @@ class TopologyBuilder:
             output_file (str): Output file path
         """
         logger.info("Generating topology output...")
-        
+        self._build_device_label_map()
         device_port_endpoints = self._build_device_port_endpoints()
         device_port_labels = self._build_device_port_labels()
         managed_identity_ip_map = self._build_known_identity_ip_map()
         edge_routers = self._identify_edge_routers()
         connected_device_data = {
-            self._clean_name(device_data.get("device_info", {}).get("identity", hostname)): device_data
+            self._get_device_label(hostname, device_data): device_data
             for hostname, device_data in self.devices_data.items()
             if device_data.get("connected", False)
         }
         connected_devices = sorted(
-            self._clean_name(device_data.get("device_info", {}).get("identity", hostname))
+            self._get_device_label(hostname, device_data)
             for hostname, device_data in self.devices_data.items()
             if device_data.get("connected", False)
         )
@@ -1184,7 +1246,7 @@ class TopologyBuilder:
                 continue
 
             root_ip = managed_identity_ip_map.get(root_device, "Unknown IP")
-            header = f"{root_device} ({root_ip})"
+            header = self._format_managed_device_label(root_device, root_ip)
             lines.append(header)
             root_device_data = connected_device_data.get(root_device, {})
             port_overrides, port_labels = self._build_wan_port_overrides(root_device_data)
@@ -1215,7 +1277,7 @@ class TopologyBuilder:
             lines.append("------------------------")
             for device_name in unattached_devices:
                 device_ip = managed_identity_ip_map.get(device_name, "Unknown IP")
-                lines.append(f"{device_name} ({device_ip})")
+                lines.append(self._format_managed_device_label(device_name, device_ip))
                 tree_lines = self._render_device_tree(
                     device_name,
                     device_port_endpoints,
@@ -1261,8 +1323,10 @@ class TopologyBuilder:
                 f.write('\n'.join(lines))
             logger.info(f"Topology output saved to {output_file}")
             print(f"Topology saved to: {output_file}")
+            return True
         except Exception as e:
             logger.error(f"Failed to save topology output to {output_file}: {e}")
+            return False
     
     def build_complete_topology(self, data_file: str, output_file: str = "data/topology.txt"):
         """
@@ -1283,13 +1347,12 @@ class TopologyBuilder:
         self.build_mac_port_map()
 
         # Generate output
-        self.generate_topology_output(output_file)
-        
-        return True
+        return self.generate_topology_output(output_file)
 
 def main():
     """Example usage of the TopologyBuilder."""
     import argparse
+    import sys
     
     parser = argparse.ArgumentParser(description="Build network topology from collected MikroTik data")
     parser.add_argument("input_file", help="JSON file with collected device data")
@@ -1305,6 +1368,7 @@ def main():
         print(f"Successfully built topology in {args.output}")
     else:
         print("Failed to build topology")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

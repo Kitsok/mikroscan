@@ -21,10 +21,10 @@
 
 ## Bug Fixes
 - ✅ **Fix SSH port routing (issue identified by user)**
-  - Updated `run_full_mapping()` to accept port parameter
-  - Modified main function to pass `args.ssh_port` to `run_full_mapping()`
-  - Fixed `collect_data()` call in `run_full_mapping()` to include port parameter
-  - Verified SSH client properly uses port parameter in connection
+  - Added explicit SSH port support to the live collection flow
+  - Updated the main function to pass `args.ssh_port` for
+    `--backend ssh` runs
+  - Verified the SSH client uses the requested port in connection
   - Confirmed `--ssh-port` option appears in help output
   - Code changes verified in source files
 
@@ -42,8 +42,10 @@
   - One default pair of credentials for all routers
   - Ability to override login/password for specific hosts
   - Added `--store-default-credentials` command line option
-  - Updated CredentialManager to support default credentials with fallback
-  - Modified credential retrieval to prioritize host-specific over default credentials
+  - Updated CredentialManager to support default credentials plus
+    host-specific overrides
+  - Modified credential retrieval to prioritize host-specific
+    credentials over the default entry
   - Added documentation to README.md
   - Added test cases in tests/test_default_credentials.py
 
