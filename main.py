@@ -17,7 +17,7 @@ from lib.data_collector import DataCollector
 from lib.connection_mapper import ConnectionMapper
 from lib.credential_manager import CredentialManager
 from lib.topology_builder import TopologyBuilder
-from lib.web_api import MicroscanAPIService, MicroscanAPIServer
+from lib.web_api import MikroscanAPIService, MikroscanAPIServer
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -703,7 +703,7 @@ Examples:
                     logger.error("Failed to unlock credential store for API server")
                     sys.exit(1)
 
-            service = MicroscanAPIService(
+            service = MikroscanAPIService(
                 mapper,
                 scan_file=args.scan_file or DEFAULT_SCAN_FILE,
                 data_file=args.data_file or DEFAULT_DATA_FILE,
@@ -721,7 +721,7 @@ Examples:
                 verbose=args.verbose,
                 use_api_ssl=args.api_ssl,
             )
-            server = MicroscanAPIServer(args.host, args.web_port, service)
+            server = MikroscanAPIServer(args.host, args.web_port, service)
             server.serve_forever()
             return
 

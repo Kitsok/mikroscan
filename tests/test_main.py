@@ -714,7 +714,7 @@ def test_serve_cli_starts_local_api_server():
         "admin",
         "-p",
         "secret",
-    ]), patch("main.MicroscanAPIService") as MockService, patch("main.MicroscanAPIServer") as MockServer:
+    ]), patch("main.MikroscanAPIService") as MockService, patch("main.MikroscanAPIServer") as MockServer:
         server = MockServer.return_value
         main_module.main()
 

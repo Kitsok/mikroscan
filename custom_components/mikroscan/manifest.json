@@ -1,0 +1,12 @@
+{
+  "domain": "mikroscan",
+  "name": "Mikroscan",
+  "codeowners": ["@kitsok"],
+  "config_flow": true,
+  "documentation": "https://github.com/kitsok/mikroscan",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "single_config_entry": true,
+  "requirements": [],
+  "version": "0.1.0"
+}

@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 
 
-class MicroscanAPIService:
-    """Coordinate topology reads and background refresh actions."""
+class MikroscanAPIService:
+    """Coordinate Mikroscan topology reads and background refresh actions."""
 
     def __init__(
         self,
@@ -320,7 +320,7 @@ class MicroscanAPIService:
 
         self._worker_thread = threading.Thread(
             target=run,
-            name=f"microscan-{action_name}",
+            name=f"mikroscan-{action_name}",
             daemon=True,
         )
         self._worker_thread.start()
@@ -341,11 +341,11 @@ class MicroscanAPIService:
         )
 
 
-def create_api_handler(service: MicroscanAPIService):
+def create_api_handler(service: MikroscanAPIService):
     """Create a request handler class bound to one API service."""
 
-    class MicroscanAPIHandler(BaseHTTPRequestHandler):
-        """HTTP handler for the local Microscan API."""
+    class MikroscanAPIHandler(BaseHTTPRequestHandler):
+        """HTTP handler for the local Mikroscan API."""
 
         def log_message(self, format: str, *args):
             logger.info("%s - %s", self.address_string(), format % args)
@@ -446,13 +446,13 @@ def create_api_handler(service: MicroscanAPIService):
 
             self._send_json(404, {"error": "not found"})
 
-    return MicroscanAPIHandler
+    return MikroscanAPIHandler
 
 
-class MicroscanAPIServer:
-    """Threading HTTP server wrapper for the local Microscan API."""
+class MikroscanAPIServer:
+    """Threading HTTP server wrapper for the local Mikroscan API."""
 
-    def __init__(self, host: str, port: int, service: MicroscanAPIService):
+    def __init__(self, host: str, port: int, service: MikroscanAPIService):
         self.host = host
         self.port = port
         self.service = service
@@ -463,7 +463,7 @@ class MicroscanAPIServer:
         """Serve requests until interrupted."""
         actual_host, actual_port = self.httpd.server_address
         logger.info(
-            "Microscan API server listening on http://%s:%s",
+            "Mikroscan API server listening on http://%s:%s",
             actual_host,
             actual_port,
         )

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused tests for the local Microscan HTTP API."""
+"""Focused tests for the local Mikroscan HTTP API."""
 
 import json
 import io
@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lib.web_api import MicroscanAPIService, create_api_handler
+from lib.web_api import MikroscanAPIService, create_api_handler
 
 
 class FakeCredentialManager:
@@ -53,7 +53,7 @@ class FakeMapper:
 
     def collect_data(self, **kwargs):
         self.collect_data_calls.append(kwargs)
-        return {"172.20.20.254": {"connected": True}}
+        return {"192.0.2.1": {"connected": True}}
 
     def _has_connected_devices(self, collected_data):
         return True
@@ -75,7 +75,7 @@ class TestWebAPI(unittest.TestCase):
         layout_handle.close()
         os.unlink(layout_handle.name)
         self.addCleanup(lambda: os.path.exists(layout_handle.name) and os.unlink(layout_handle.name))
-        return MicroscanAPIService(
+        return MikroscanAPIService(
             mapper,
             scan_file="data/scan_results.json",
             data_file="data/collected_data.json",
@@ -285,7 +285,7 @@ class TestWebAPI(unittest.TestCase):
             status_code, headers, payload = self._invoke_handler_raw(service, "GET", "/")
             self.assertEqual(status_code, 200)
             self.assertEqual(headers["Content-Type"], "text/html")
-            self.assertIn(b"Microscan Topology", payload)
+            self.assertIn(b"Mikroscan Topology", payload)
         finally:
             if os.path.exists(topology_json):
                 os.unlink(topology_json)

@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Mikroscan",
+        "description": "Connect Home Assistant to the local Mikroscan service.",
+        "data": {
+          "host": "Mikroscan host",
+          "web_port": "Mikroscan web port",
+          "scan_range": "Default scan range"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Mikroscan",
+        "data": {
+          "host": "Mikroscan host",
+          "web_port": "Mikroscan web port",
+          "scan_range": "Default scan range"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the Mikroscan service"
+    },
+    "abort": {
+      "already_configured": "Mikroscan is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Mikroscan options",
+        "data": {
+          "scan_range": "Default scan range"
+        }
+      }
+    }
+  }
+}
