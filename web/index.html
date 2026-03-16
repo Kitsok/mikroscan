@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Microscan Topology</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="eyebrow">Microscan</div>
+        <h1>Topology Map</h1>
+        <p class="lede">Interactive physical tree built from the current topology model.</p>
+      </div>
+
+      <section class="panel actions">
+        <div class="panel-title">Actions</div>
+        <button id="refresh-topology" type="button">Reload Topology</button>
+        <button id="generate-topology" type="button">Regenerate Topology</button>
+        <button id="scan-network" type="button">Refresh From Devices</button>
+        <button id="reset-layout" type="button">Reset Layout</button>
+        <label class="field">
+          <span>Optional scan range</span>
+          <input id="scan-range" type="text" placeholder="192.168.1.0/24">
+        </label>
+      </section>
+
+      <section class="panel status">
+        <div class="panel-title">Status</div>
+        <dl id="status-grid" class="status-grid"></dl>
+      </section>
+
+      <section class="panel details">
+        <div class="panel-title">Selected Node</div>
+        <div id="node-details" class="details-body">Click a node to inspect it.</div>
+      </section>
+
+      <section class="panel unresolved">
+        <div class="panel-title">Unresolved Hosts</div>
+        <div id="unresolved-hosts" class="unresolved-list">No unresolved hosts.</div>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <div class="workspace-header">
+        <div>
+          <div class="eyebrow">Map</div>
+          <h2 id="map-title">Current topology</h2>
+        </div>
+        <div class="hint">Click to inspect. Double-click to collapse. Drag to reposition.</div>
+      </div>
+
+      <div id="canvas-wrapper" class="canvas-wrapper">
+        <svg id="edge-layer" class="edge-layer"></svg>
+        <div id="node-layer" class="node-layer"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

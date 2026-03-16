@@ -17,6 +17,7 @@ from lib.data_collector import DataCollector
 from lib.connection_mapper import ConnectionMapper
 from lib.credential_manager import CredentialManager
 from lib.topology_builder import TopologyBuilder
+from lib.web_api import MicroscanAPIService, MicroscanAPIServer
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DATA_FILE = "data/collected_data.json"
 DEFAULT_SCAN_FILE = "data/scan_results.json"
 DEFAULT_TOPOLOGY_JSON_FILE = "data/topology_graph.json"
+DEFAULT_LAYOUT_FILE = "data/topology_layout.json"
 
 class MikrotikMapper:
     """Main application class for Mikrotik network mapping."""
@@ -472,6 +474,12 @@ Examples:
         action="store_true",
         help="Generate structured topology JSON from collected data"
     )
+
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Run the local HTTP API server"
+    )
     
     # Credential management
     parser.add_argument(
@@ -542,6 +550,19 @@ Examples:
         dest="api_ssl",
         action="store_false",
         help="Disable TLS for the native RouterOS API backend (default)"
+    )
+
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host/interface for the local HTTP API server (default: 127.0.0.1)"
+    )
+
+    parser.add_argument(
+        "--web-port",
+        type=int,
+        default=8080,
+        help="Port for the local HTTP API server (default: 8080)"
     )
     
     parser.add_argument(
@@ -666,7 +687,7 @@ Examples:
     # Create mapper
     mapper = MikrotikMapper()
 
-    needs_live_collection = bool(args.ip_range or args.scan_file)
+    needs_live_collection = bool(args.ip_range or args.scan_file or args.serve)
     # Get password if needed and not provided
     if needs_live_collection and args.username and not args.password and not args.key_file:
         args.password = getpass.getpass("Device Password: ")
@@ -675,6 +696,35 @@ Examples:
     connection_map = {}
     
     try:
+        if args.serve:
+            if not args.username and mapper.credential_manager.has_usable_store():
+                logger.info("Unlocking credential store for local API server")
+                if not mapper.credential_manager.authenticate():
+                    logger.error("Failed to unlock credential store for API server")
+                    sys.exit(1)
+
+            service = MicroscanAPIService(
+                mapper,
+                scan_file=args.scan_file or DEFAULT_SCAN_FILE,
+                data_file=args.data_file or DEFAULT_DATA_FILE,
+                map_output=args.output,
+                readable_output=args.readable_output,
+                topology_output="data/topology.txt",
+                topology_json_output=args.topology_json_output,
+                layout_output=DEFAULT_LAYOUT_FILE,
+                username=args.username,
+                password=args.password,
+                key_file=args.key_file,
+                backend=args.backend,
+                collection_port=collection_port,
+                timeout=args.timeout,
+                verbose=args.verbose,
+                use_api_ssl=args.api_ssl,
+            )
+            server = MicroscanAPIServer(args.host, args.web_port, service)
+            server.serve_forever()
+            return
+
         if args.scan_file:
             # Collect data and build map
             logger.info("Collecting data, building map, and generating topology from scan file")

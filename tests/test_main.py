@@ -701,6 +701,29 @@ def test_generate_topology_json_cli_uses_default_output():
     print("✓ topology JSON CLI default-output test passed")
 
 
+def test_serve_cli_starts_local_api_server():
+    """The serve CLI path should construct and run the local API server."""
+    with patch.object(sys, "argv", [
+        "main.py",
+        "--serve",
+        "--host",
+        "127.0.0.1",
+        "--web-port",
+        "9090",
+        "-u",
+        "admin",
+        "-p",
+        "secret",
+    ]), patch("main.MicroscanAPIService") as MockService, patch("main.MicroscanAPIServer") as MockServer:
+        server = MockServer.return_value
+        main_module.main()
+
+    MockService.assert_called_once()
+    MockServer.assert_called_once()
+    server.serve_forever.assert_called_once()
+    print("✓ serve CLI dispatch test passed")
+
+
 def test_full_scan_also_generates_topology():
     """The subnet scan workflow should also regenerate topology."""
     with patch("main.MikrotikMapper") as MockMapper:
@@ -974,6 +997,7 @@ def main():
         test_scan_file_does_not_preauth_before_collection()
         test_generate_topology_exits_non_zero_on_failure()
         test_generate_topology_json_cli_uses_default_output()
+        test_serve_cli_starts_local_api_server()
         test_full_scan_also_generates_topology()
         test_run_full_mapping_returns_empty_on_topology_failure()
         test_direct_build_map_cli_exits_non_zero_on_failure()
