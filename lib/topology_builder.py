@@ -24,6 +24,7 @@ class TopologyBuilder:
         self.ip_name_map = {}
         self.mac_port_map = {}
         self.device_label_map = {}
+        self.overlay_interface_types = {"wireguard", "zerotier"}
 
     def _clean_name(self, name: str) -> str:
         """Normalize display names parsed from RouterOS output."""
@@ -161,15 +162,47 @@ class TopologyBuilder:
 
         return interface_map
 
-    def _is_physical_interface(self, interface: str) -> bool:
-        """Return True for physical-facing interfaces we want in the tree."""
-        if not interface:
+    def _normalize_interface_type(self, interface_data: Dict[str, Any] | None) -> str:
+        """Return a normalized interface type for rendering decisions."""
+        if not interface_data:
+            return ""
+        return self._clean_name(interface_data.get("type", "")).lower()
+
+    def _is_physical_interface(
+        self,
+        interface: str,
+        interface_data: Dict[str, Any] | None = None,
+    ) -> bool:
+        """Return True for interfaces we want to render in the topology tree."""
+        if not interface and not interface_data:
             return False
 
-        interface = interface.lower()
+        interface_type = self._normalize_interface_type(interface_data)
+        if interface_type in self.overlay_interface_types:
+            return True
+
+        interface = (interface or "").lower()
         return any(
             interface.startswith(prefix)
             for prefix in ("ether", "wifi", "wlan", "sfp", "combo")
+        )
+
+    def _is_standalone_overlay_interface(
+        self,
+        interface_name: str,
+        interface_data: Dict[str, Any],
+        interface_ip_map: Dict[str, str],
+    ) -> bool:
+        """Return True for overlay interfaces that should render without endpoints."""
+        interface_type = self._normalize_interface_type(interface_data)
+        if interface_type not in self.overlay_interface_types:
+            return False
+
+        return bool(
+            self._get_interface_mac(interface_data)
+            or interface_ip_map.get(interface_name)
+            or interface_data.get("running") == "true"
+            or interface_data.get("disabled") == "false"
         )
 
     def _build_local_device_mac_sets(self) -> Dict[str, Set[str]]:
@@ -424,6 +457,15 @@ class TopologyBuilder:
 
         return ""
 
+    def _get_overlay_type_label(self, interface_data: Dict[str, Any]) -> str:
+        """Return a display suffix for overlay interface types."""
+        interface_type = self._normalize_interface_type(interface_data)
+        if interface_type == "wireguard":
+            return " [WireGuard]"
+        if interface_type == "zerotier":
+            return " [ZeroTier]"
+        return ""
+
     def _format_interface_label(
         self,
         interface_name: str,
@@ -441,7 +483,33 @@ class TopologyBuilder:
 
         label += self._get_vlan_label(interface_name, interface_data)
         label += self._get_poe_label(interface_data)
+        label += self._get_overlay_type_label(interface_data)
         return label
+
+    def _build_device_standalone_ports(self) -> Dict[str, Set[str]]:
+        """Build overlay ports that should render even without bridge-host endpoints."""
+        standalone_ports: Dict[str, Set[str]] = defaultdict(set)
+
+        if not self.device_label_map:
+            self._build_device_label_map()
+
+        for hostname, device_data in self.devices_data.items():
+            if not device_data.get("connected", False):
+                continue
+
+            device_name = self._get_device_label(hostname, device_data)
+            interfaces_by_name = self._get_interfaces_by_name(device_data)
+            interface_ip_map = self._build_interface_ip_map(device_data)
+
+            for interface_name, interface_data in interfaces_by_name.items():
+                if self._is_standalone_overlay_interface(
+                    interface_name,
+                    interface_data,
+                    interface_ip_map,
+                ):
+                    standalone_ports[device_name].add(interface_name)
+
+        return {device_name: set(ports) for device_name, ports in standalone_ports.items()}
 
     def _build_wan_port_overrides(
         self,
@@ -522,7 +590,7 @@ class TopologyBuilder:
             port_labels = {}
 
             for interface_name, interface_data in interfaces_by_name.items():
-                if not self._is_physical_interface(interface_name):
+                if not self._is_physical_interface(interface_name, interface_data):
                     continue
                 port_labels[interface_name] = self._format_interface_label(
                     interface_name,
@@ -755,12 +823,14 @@ class TopologyBuilder:
                 continue
                 
             device_name = self._get_device_label(hostname, device_data)
+            interfaces_by_name = self._get_interfaces_by_name(device_data)
             
             for bridge_host in device_data.get("bridge_hosts", []):
                 mac = bridge_host.get("mac_address", "").upper()
                 interface = bridge_host.get("interface", "")
                 if mac and interface:
-                    if self._is_physical_interface(interface):
+                    interface_data = interfaces_by_name.get(interface, {})
+                    if self._is_physical_interface(interface, interface_data):
                         self.mac_port_map[mac] = {
                             "device": device_name,
                             "port": interface
@@ -790,10 +860,18 @@ class TopologyBuilder:
                 mac = bridge_host.get("mac_address", "").upper()
                 port = bridge_host.get("interface") or bridge_host.get("on_interface") or ""
 
-                if not mac or not self._is_physical_interface(port):
+                if not mac:
                     continue
                 if mac == "00:00:00:00:00:00":
                     continue
+
+                port_interface = self._get_interfaces_by_name(device_data).get(
+                    self._clean_name(port),
+                    {},
+                )
+                if not self._is_physical_interface(port, port_interface):
+                    continue
+
                 if mac in local_device_mac_sets.get(device_name, set()):
                     continue
 
@@ -1092,17 +1170,21 @@ class TopologyBuilder:
         port_overrides: Dict[str, List[Dict[str, Any]]] = None,
         port_labels: Dict[str, str] = None,
         device_port_labels: Dict[str, Dict[str, str]] = None,
+        standalone_ports: Dict[str, Set[str]] = None,
     ) -> List[str]:
         """Render a recursive per-port tree for one managed device."""
         lines = []
         port_overrides = port_overrides or {}
         port_labels = port_labels or {}
         device_port_labels = device_port_labels or {}
+        standalone_ports = standalone_ports or {}
         rendered_host_macs = rendered_host_macs if rendered_host_macs is not None else set()
         ports = [
             port
             for port in sorted(
-                set(device_port_endpoints.get(device_name, {})) | set(port_overrides)
+                set(device_port_endpoints.get(device_name, {}))
+                | set(port_overrides)
+                | set(standalone_ports.get(device_name, set()))
             )
             if port != upstream_port
         ]
@@ -1189,6 +1271,7 @@ class TopologyBuilder:
                         upstream_port=child_upstream_port,
                         prefix=child_prefix,
                         device_port_labels=device_port_labels,
+                        standalone_ports=standalone_ports,
                     )
                     if child_lines:
                         lines.extend(child_lines)
@@ -1215,6 +1298,7 @@ class TopologyBuilder:
         self._build_device_label_map()
         device_port_endpoints = self._build_device_port_endpoints()
         device_port_labels = self._build_device_port_labels()
+        standalone_ports = self._build_device_standalone_ports()
         managed_identity_ip_map = self._build_known_identity_ip_map()
         edge_routers = self._identify_edge_routers()
         connected_device_data = {
@@ -1259,6 +1343,7 @@ class TopologyBuilder:
                 port_overrides=port_overrides,
                 port_labels=port_labels,
                 device_port_labels=device_port_labels,
+                standalone_ports=standalone_ports,
             )
             if tree_lines:
                 lines.extend(tree_lines)
@@ -1284,6 +1369,7 @@ class TopologyBuilder:
                     {device_name},
                     rendered_host_macs=rendered_host_macs,
                     device_port_labels=device_port_labels,
+                    standalone_ports=standalone_ports,
                 )
                 if tree_lines:
                     lines.extend(tree_lines)

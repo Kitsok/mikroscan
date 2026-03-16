@@ -782,6 +782,60 @@ def test_build_complete_topology_fails_when_output_write_fails():
     print("✓ topology output write failure test passed")
 
 
+def test_generate_topology_output_renders_wireguard_and_zerotier_interfaces():
+    """WireGuard and ZeroTier interfaces should render as standalone ports."""
+    builder = TopologyBuilder()
+    builder.devices_data = {
+        "10.0.0.1": {
+            "hostname": "10.0.0.1",
+            "connected": True,
+            "device_info": {"identity": "Root"},
+            "interfaces": [
+                {"name": "ether1", "type": "ether", "mac_address": "AA:AA:AA:AA:AA:01"},
+                {
+                    "name": "wg-home",
+                    "type": "wireguard",
+                    "mac_address": "02:00:00:00:00:01",
+                },
+                {
+                    "name": "zerotier1",
+                    "type": "zerotier",
+                    "mac_address": "02:00:00:00:00:02",
+                },
+            ],
+            "bridge_hosts": [],
+            "dhcp_leases": [],
+            "dns_static": [],
+            "arp_table": [],
+            "ip_addresses": [
+                {"address": "10.10.10.1/24", "interface": "wg-home"},
+                {"address": "172.22.22.1/24", "interface": "zerotier1"},
+            ],
+            "neighbors": [],
+        }
+    }
+
+    builder.build_mac_name_map()
+    builder.build_mac_ip_map()
+    builder.build_ip_name_map()
+    builder.build_mac_port_map()
+
+    with tempfile.NamedTemporaryFile(mode="r", delete=False) as handle:
+        output_file = handle.name
+
+    try:
+        assert builder.generate_topology_output(output_file) is True
+        with open(output_file, "r") as handle:
+            output = handle.read()
+    finally:
+        if os.path.exists(output_file):
+            os.unlink(output_file)
+
+    assert "wg-home (10.10.10.1/24) [02:00:00:00:00:01] [WireGuard]" in output
+    assert "zerotier1 (172.22.22.1/24) [02:00:00:00:00:02] [ZeroTier]" in output
+    print("✓ WireGuard and ZeroTier topology rendering test passed")
+
+
 def test_topology_builder_cli_exits_non_zero_on_failure():
     """Standalone topology CLI should fail the process on build errors."""
     import lib.topology_builder as topology_builder_module
@@ -815,6 +869,7 @@ def main():
         test_duplicate_identities_render_as_distinct_topology_nodes()
         test_reused_builder_resets_derived_maps_between_datasets()
         test_build_complete_topology_fails_when_output_write_fails()
+        test_generate_topology_output_renders_wireguard_and_zerotier_interfaces()
         test_topology_builder_cli_exits_non_zero_on_failure()
         print("\nAll Topology Builder tests passed! ✓")
         return 0
