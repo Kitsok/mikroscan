@@ -32,4 +32,4 @@ schema:
   api_ssl: bool
   verbose: bool
   device_username: str?
-  device_password: str?
+  device_password: password?
