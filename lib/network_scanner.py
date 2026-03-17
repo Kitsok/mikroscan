@@ -98,17 +98,18 @@ class NetworkScanner:
             List[str]: List of active IP addresses
         """
         try:
-            network = ipaddress.ip_network(ip_range, strict=False)
+            network = ipaddress.ip_network(ip_range, strict=True)
         except ValueError as e:
             logger.error(f"Invalid IP range: {ip_range} - {e}")
             return []
-        
+
+        hosts = list(network.hosts())
         active_hosts = []
-        total_hosts = network.num_addresses
-        
-        logger.info(f"Scanning {total_hosts} hosts in {ip_range}...")
-        
-        for i, ip in enumerate(network.hosts()):
+        total_hosts = len(hosts)
+
+        logger.info(f"Scanning {total_hosts} hosts in {network.with_prefixlen}...")
+
+        for i, ip in enumerate(hosts):
             if self.ping_host(str(ip)):
                 active_hosts.append(str(ip))
                 if self.verbose:

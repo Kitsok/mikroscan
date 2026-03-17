@@ -11,7 +11,6 @@ from typing import Dict, List, Set, Tuple, Any
 from collections import defaultdict
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class TopologyBuilder:

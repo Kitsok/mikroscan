@@ -12,8 +12,6 @@ from typing import Dict, List, Any, Type
 from lib.mikrotik_api import MikrotikAPIClient
 from lib.mikrotik_ssh import MikrotikSSHClient
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class DataCollector:

@@ -600,7 +600,8 @@ Examples:
     # Set up logging level based on verbose flag
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        force=True,
     )
     
     # Handle credential storage

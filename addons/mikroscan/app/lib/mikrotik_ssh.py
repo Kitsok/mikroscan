@@ -12,8 +12,6 @@ import time
 from typing import Dict, List, Optional, Tuple
 import os
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class MikrotikSSHClient:

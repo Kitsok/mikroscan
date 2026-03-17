@@ -10,7 +10,6 @@ import os
 from typing import Dict, List, Set, Tuple, Any, Optional
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class ConnectionMapper:
