@@ -35,6 +35,7 @@ class MikroscanAPIService:
         topology_output: str,
         topology_json_output: str,
         layout_output: str,
+        state_output: str,
         username: str | None,
         password: str | None,
         key_file: str | None,
@@ -44,6 +45,7 @@ class MikroscanAPIService:
         verbose: bool,
         use_api_ssl: bool,
         refresh_interval: int = 0,
+        default_scan_range: str = "",
     ):
         self.mapper = mapper
         self.scan_file = scan_file
@@ -53,6 +55,7 @@ class MikroscanAPIService:
         self.topology_output = topology_output
         self.topology_json_output = topology_json_output
         self.layout_output = layout_output
+        self.state_output = state_output
         self.username = username
         self.password = password
         self.key_file = key_file
@@ -62,6 +65,7 @@ class MikroscanAPIService:
         self.verbose = verbose
         self.use_api_ssl = use_api_ssl
         self.refresh_interval = max(0, int(refresh_interval))
+        self.default_scan_range = default_scan_range.strip()
 
         self._status_lock = threading.Lock()
         self._worker_thread: threading.Thread | None = None
@@ -76,7 +80,9 @@ class MikroscanAPIService:
             "last_success": None,
             "last_error": "",
             "last_result": {},
+            "last_scan_range": "",
         }
+        self._load_runtime_state()
 
     def _utc_now(self) -> str:
         """Return the current UTC timestamp in ISO8601 form."""
@@ -139,6 +145,9 @@ class MikroscanAPIService:
             except Exception as exc:
                 logger.debug("Unable to read build info file: %s", exc)
 
+        version = self._app_version()
+        if version != "unknown":
+            return version
         return "unknown"
 
     def _app_version(self) -> str:
@@ -179,7 +188,41 @@ class MikroscanAPIService:
         status["data_file"] = self.data_file
         status["auto_refresh_interval"] = self.refresh_interval
         status["auto_refresh_enabled"] = self.refresh_interval > 0
+        status["default_scan_range"] = self.default_scan_range
         return status
+
+    def _load_runtime_state(self) -> None:
+        """Load persistent service UI state."""
+        if not os.path.exists(self.state_output):
+            return
+        try:
+            with open(self.state_output, "r") as handle:
+                payload = json.load(handle)
+        except Exception as exc:
+            logger.debug("Unable to load service state: %s", exc)
+            return
+
+        last_scan_range = str(payload.get("last_scan_range", "")).strip()
+        if last_scan_range:
+            self._status["last_scan_range"] = last_scan_range
+
+    def _save_runtime_state(self) -> None:
+        """Persist service UI state."""
+        try:
+            output_dir = os.path.dirname(self.state_output)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            with open(self.state_output, "w") as handle:
+                json.dump(
+                    {
+                        "last_scan_range": self._status.get("last_scan_range", ""),
+                        "saved_at": self._utc_now(),
+                    },
+                    handle,
+                    indent=2,
+                )
+        except Exception as exc:
+            logger.debug("Unable to save service state: %s", exc)
 
     def load_topology_model(self) -> Dict[str, Any]:
         """Load the current structured topology JSON."""
@@ -487,10 +530,14 @@ class MikroscanAPIService:
             raise RuntimeError(error_message)
 
         previous_model = self._load_topology_model_if_exists()
+        effective_scan_range = (ip_range or "").strip()
+        with self._status_lock:
+            self._status["last_scan_range"] = effective_scan_range
+        self._save_runtime_state()
 
-        if ip_range:
+        if effective_scan_range:
             connection_map = self.mapper.run_full_mapping(
-                ip_range=ip_range,
+                ip_range=effective_scan_range,
                 username=self.username,
                 password=self.password,
                 key_file=self.key_file,

@@ -24,6 +24,7 @@ DEFAULT_DATA_FILE = "data/collected_data.json"
 DEFAULT_SCAN_FILE = "data/scan_results.json"
 DEFAULT_TOPOLOGY_JSON_FILE = "data/topology_graph.json"
 DEFAULT_LAYOUT_FILE = "data/topology_layout.json"
+DEFAULT_SERVICE_STATE_FILE = "data/service_state.json"
 DEFAULT_REFRESH_INTERVAL = 0
 
 class MikrotikMapper:
@@ -574,6 +575,12 @@ Examples:
         default=DEFAULT_REFRESH_INTERVAL,
         help="Automatic known-device refresh interval in seconds (default: 0, disabled)"
     )
+
+    parser.add_argument(
+        "--default-scan-range",
+        default="",
+        help="Default scan range shown in the web UI"
+    )
     
     parser.add_argument(
         "--timeout",
@@ -723,6 +730,7 @@ Examples:
                 topology_output="data/topology.txt",
                 topology_json_output=args.topology_json_output,
                 layout_output=DEFAULT_LAYOUT_FILE,
+                state_output=DEFAULT_SERVICE_STATE_FILE,
                 username=args.username,
                 password=args.password,
                 key_file=args.key_file,
@@ -732,6 +740,7 @@ Examples:
                 verbose=args.verbose,
                 use_api_ssl=args.api_ssl,
                 refresh_interval=args.refresh_interval,
+                default_scan_range=args.default_scan_range,
             )
             server = MikroscanAPIServer(args.host, args.web_port, service)
             server.serve_forever()

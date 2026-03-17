@@ -366,11 +366,16 @@
       `${mode} • ${deviceCount} devices • ${hostCount} hosts • ${unresolved} unresolved`;
 
     const busy = Boolean(status.running);
-    elements.generateTopology.disabled = busy;
+    if (elements.generateTopology) {
+      elements.generateTopology.disabled = busy;
+    }
     elements.scanNetwork.disabled = busy;
     if (elements.buildId) {
       elements.buildId.textContent =
         `v${status.app_version || "unknown"} • build ${status.build_id || "unknown"}`;
+    }
+    if (elements.scanRange && document.activeElement !== elements.scanRange) {
+      elements.scanRange.value = status.last_scan_range || status.default_scan_range || "";
     }
   }
 
@@ -652,21 +657,6 @@
     }
   }
 
-  async function handleGenerateTopology() {
-    await postAction("api/generate-topology");
-    await waitForIdle();
-    await loadStatus();
-    if (state.status.last_success) {
-      if (canReloadTopologyNow()) {
-        await loadTopology();
-      } else {
-        state.pendingTopologyReload = true;
-      }
-      return;
-    }
-    throw new Error(state.status.last_error || "topology generation failed");
-  }
-
   async function handleScan() {
     const ipRange = elements.scanRange.value.trim();
     await postAction("api/scan", ipRange ? { ip_range: ipRange } : {});
@@ -687,14 +677,6 @@
     elements.refreshTopology.addEventListener("click", async () => {
       await loadStatus();
       await loadTopology();
-    });
-    elements.generateTopology.addEventListener("click", async () => {
-      try {
-        await handleGenerateTopology();
-      } catch (error) {
-        elements.nodeDetails.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
-        elements.detailsDrawer.classList.add("open");
-      }
     });
     elements.scanNetwork.addEventListener("click", async () => {
       try {

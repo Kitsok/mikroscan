@@ -197,7 +197,6 @@ class MikroscanMapBase extends HTMLElement {
             <h2>${this._escapeHtml(this._config.title || "Mikroscan Map")}</h2>
             ${this._config.show_controls === false ? "" : `
               <mwc-button id="refresh" label="Reload"></mwc-button>
-              <mwc-button id="generate" label="Generate"></mwc-button>
               <mwc-button id="scan" label="Scan"></mwc-button>
             `}
           </div>
@@ -220,7 +219,6 @@ class MikroscanMapBase extends HTMLElement {
     this._detailsEl = this.shadowRoot.getElementById("details");
 
     this.shadowRoot.getElementById("refresh")?.addEventListener("click", () => this._loadAll());
-    this.shadowRoot.getElementById("generate")?.addEventListener("click", () => this._generateTopology());
     this.shadowRoot.getElementById("scan")?.addEventListener("click", () => this._scan());
 
     window.addEventListener("pointermove", (event) => this._onPointerMove(event));
@@ -597,17 +595,12 @@ class MikroscanMapBase extends HTMLElement {
     }, 120);
   }
 
-  async _generateTopology() {
-    await this._hass.callService("mikroscan", "generate_topology", {});
-    if (this._canReloadNow()) {
-      await this._loadAll();
-    } else {
-      this._state.pendingTopologyReload = true;
-    }
-  }
-
   async _scan() {
-    const scanRange = this._config.scan_range || "";
+    const scanRange =
+      this._config.scan_range
+      || this._state.status?.last_scan_range
+      || this._state.status?.default_scan_range
+      || "";
     const payload = scanRange ? { ip_range: scanRange } : {};
     await this._hass.callService("mikroscan", "scan", payload);
     if (this._canReloadNow()) {

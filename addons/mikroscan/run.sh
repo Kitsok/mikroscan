@@ -15,6 +15,7 @@ BACKEND="$(bashio::config 'backend')"
 API_PORT="$(bashio::config 'api_port')"
 SSH_PORT="$(bashio::config 'ssh_port')"
 REFRESH_INTERVAL="$(bashio::config 'refresh_interval')"
+SCAN_RANGE="$(bashio::config 'scan_range')"
 API_SSL="$(bashio::config 'api_ssl')"
 VERBOSE="$(bashio::config 'verbose')"
 DEVICE_USERNAME="$(bashio::config 'device_username')"
@@ -36,6 +37,7 @@ ARGS=(
   "--host" "0.0.0.0"
   "--web-port" "8099"
   "--refresh-interval" "${REFRESH_INTERVAL}"
+  "--default-scan-range" "${SCAN_RANGE}"
   "--backend" "${BACKEND}"
 )
 
