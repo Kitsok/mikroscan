@@ -9,6 +9,7 @@
     manualPositions: new Map(),
     drag: null,
     saveLayoutTimer: null,
+    viewScale: 1,
   };
 
   const H_SPACING = 214;
@@ -246,12 +247,26 @@
     const { items, edges } = flattenTree();
     const width = Math.max(...items.map((item) => item.x), 0) + NODE_WIDTH + PADDING * 2;
     const height = Math.max(...items.map((item) => item.y), 0) + NODE_HEIGHT + PADDING * 2;
+    const availableWidth = Math.max(elements.canvasWrapper.clientWidth - 12, NODE_WIDTH);
+    const availableHeight = Math.max(elements.canvasWrapper.clientHeight - 12, NODE_HEIGHT);
+    const scale = Math.min(
+      1,
+      (availableWidth * 0.98) / Math.max(width, 1),
+      (availableHeight * 0.98) / Math.max(height, 1),
+    );
+    const offsetX = Math.max(0, (availableWidth - width * scale) / 2);
+    const offsetY = Math.max(0, (availableHeight - height * scale) / 2);
+    state.viewScale = scale;
 
     elements.nodeLayer.style.width = `${width}px`;
     elements.nodeLayer.style.height = `${height}px`;
+    elements.nodeLayer.style.transformOrigin = "top left";
+    elements.nodeLayer.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
     elements.edgeLayer.setAttribute("width", String(width));
     elements.edgeLayer.setAttribute("height", String(height));
     elements.edgeLayer.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    elements.edgeLayer.style.transformOrigin = "top left";
+    elements.edgeLayer.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
 
     const positions = new Map(
       items.map((item) => [
@@ -457,8 +472,8 @@
       const dx = event.clientX - state.drag.startX;
       const dy = event.clientY - state.drag.startY;
       state.manualPositions.set(state.drag.nodeId, {
-        dx: state.drag.base.dx + dx,
-        dy: state.drag.base.dy + dy,
+        dx: state.drag.base.dx + dx / state.viewScale,
+        dy: state.drag.base.dy + dy / state.viewScale,
       });
       renderCanvas();
     });
@@ -470,6 +485,11 @@
     });
     window.addEventListener("pointercancel", () => {
       state.drag = null;
+    });
+    window.addEventListener("resize", () => {
+      if (state.topology) {
+        renderCanvas();
+      }
     });
 
     try {

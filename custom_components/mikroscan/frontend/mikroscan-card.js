@@ -144,7 +144,9 @@ class MikroscanMapBase extends HTMLElement {
       manualPositions: new Map(),
       drag: null,
       saveTimer: null,
+      viewScale: 1,
     };
+    this._resizeObserver = null;
   }
 
   setConfig(config) {
@@ -215,6 +217,16 @@ class MikroscanMapBase extends HTMLElement {
     window.addEventListener("pointercancel", () => {
       this._state.drag = null;
     });
+
+    if (typeof ResizeObserver !== "undefined") {
+      this._resizeObserver?.disconnect();
+      this._resizeObserver = new ResizeObserver(() => {
+        if (this._state.topology) {
+          this._render();
+        }
+      });
+      this._resizeObserver.observe(this._canvasEl);
+    }
   }
 
   async _callApi(method, path, body) {
@@ -341,14 +353,28 @@ class MikroscanMapBase extends HTMLElement {
     const { items, edges } = this._flattenTree();
     const width = Math.max(...items.map((item) => item.x), 0) + NODE_WIDTH + PADDING * 2;
     const height = Math.max(...items.map((item) => item.y), 0) + NODE_HEIGHT + PADDING * 2;
+    const availableWidth = Math.max(this._canvasEl.clientWidth - 12, NODE_WIDTH);
+    const availableHeight = Math.max(this._canvasEl.clientHeight - 12, NODE_HEIGHT);
+    const scale = Math.min(
+      1,
+      (availableWidth * 0.98) / Math.max(width, 1),
+      (availableHeight * 0.98) / Math.max(height, 1),
+    );
+    const offsetX = Math.max(0, (availableWidth - width * scale) / 2);
+    const offsetY = Math.max(0, (availableHeight - height * scale) / 2);
+    this._state.viewScale = scale;
     const positions = new Map(items.map((item) => [item.id, { x: item.x + PADDING, y: item.y + PADDING }]));
 
-    this._canvasEl.style.minHeight = `${Math.max(height, 420)}px`;
+    this._canvasEl.style.minHeight = `${Math.max(height * scale + 16, 300)}px`;
     this._nodesEl.style.width = `${width}px`;
     this._nodesEl.style.height = `${height}px`;
+    this._nodesEl.style.transformOrigin = "top left";
+    this._nodesEl.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
     this._edgesEl.setAttribute("width", String(width));
     this._edgesEl.setAttribute("height", String(height));
     this._edgesEl.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    this._edgesEl.style.transformOrigin = "top left";
+    this._edgesEl.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
 
     this._edgesEl.innerHTML = edges.map((edge) => {
       const from = positions.get(edge.from);
@@ -440,8 +466,8 @@ class MikroscanMapBase extends HTMLElement {
     const dx = event.clientX - this._state.drag.startX;
     const dy = event.clientY - this._state.drag.startY;
     this._state.manualPositions.set(this._state.drag.nodeId, {
-      dx: this._state.drag.base.dx + dx,
-      dy: this._state.drag.base.dy + dy,
+      dx: this._state.drag.base.dx + dx / this._state.viewScale,
+      dy: this._state.drag.base.dy + dy / this._state.viewScale,
     });
     this._render();
   }
