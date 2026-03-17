@@ -230,6 +230,64 @@
       .join("");
   }
 
+  function edgeAnchor(point, side) {
+    if (side === "left") {
+      return { x: point.x, y: point.y + NODE_HEIGHT / 2 };
+    }
+    if (side === "right") {
+      return { x: point.x + NODE_WIDTH, y: point.y + NODE_HEIGHT / 2 };
+    }
+    if (side === "top") {
+      return { x: point.x + NODE_WIDTH / 2, y: point.y };
+    }
+    return { x: point.x + NODE_WIDTH / 2, y: point.y + NODE_HEIGHT };
+  }
+
+  function chooseEdgeAnchors(from, to) {
+    const fromCenterX = from.x + NODE_WIDTH / 2;
+    const fromCenterY = from.y + NODE_HEIGHT / 2;
+    const toCenterX = to.x + NODE_WIDTH / 2;
+    const toCenterY = to.y + NODE_HEIGHT / 2;
+    const dx = toCenterX - fromCenterX;
+    const dy = toCenterY - fromCenterY;
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return dx >= 0
+        ? { fromSide: "right", toSide: "left" }
+        : { fromSide: "left", toSide: "right" };
+    }
+
+    return dy >= 0
+      ? { fromSide: "bottom", toSide: "top" }
+      : { fromSide: "top", toSide: "bottom" };
+  }
+
+  function buildEdgePath(from, to) {
+    const { fromSide, toSide } = chooseEdgeAnchors(from, to);
+    const start = edgeAnchor(from, fromSide);
+    const end = edgeAnchor(to, toSide);
+
+    if (fromSide === "left" || fromSide === "right") {
+      const jointX = start.x + (end.x - start.x) / 2;
+      return {
+        start,
+        end,
+        labelX: start.x + (jointX - start.x) * 0.45,
+        labelY: start.y + (end.y - start.y) * 0.2,
+        d: `M ${start.x} ${start.y} L ${jointX} ${start.y} L ${jointX} ${end.y} L ${end.x} ${end.y}`,
+      };
+    }
+
+    const jointY = start.y + (end.y - start.y) / 2;
+    return {
+      start,
+      end,
+      labelX: start.x + (end.x - start.x) * 0.2,
+      labelY: start.y + (jointY - start.y) * 0.45,
+      d: `M ${start.x} ${start.y} L ${start.x} ${jointY} L ${end.x} ${jointY} L ${end.x} ${end.y}`,
+    };
+  }
+
   function renderStatus() {
     const status = state.status || {};
     const topology = state.topology || {};
@@ -352,14 +410,8 @@
         if (!from || !to) {
           return "";
         }
-
-        const startX = from.x + NODE_WIDTH;
-        const startY = from.y + NODE_HEIGHT / 2;
-        const endX = to.x;
-        const endY = to.y + NODE_HEIGHT / 2;
-        const jointX = startX + 12;
-        const elbowX = Math.max(jointX, startX + Math.max(18, (endX - startX) * 0.45));
-        return `<path class="edge-line" d="M ${startX} ${startY} L ${jointX} ${startY} L ${elbowX} ${startY} L ${elbowX} ${endY} L ${endX} ${endY}" />`;
+        const route = buildEdgePath(from, to);
+        return `<path class="edge-line" d="${route.d}" />`;
       })
       .join("");
 
@@ -373,12 +425,9 @@
         if (!from || !to) {
           return "";
         }
-        const startX = from.x + NODE_WIDTH;
-        const startY = from.y + NODE_HEIGHT / 2;
-        const endX = to.x;
-        const endY = to.y + NODE_HEIGHT / 2;
-        const left = startX + Math.min(74, Math.max(28, (endX - startX) * 0.28));
-        const top = startY + (endY - startY) * 0.24;
+        const route = buildEdgePath(from, to);
+        const left = route.labelX;
+        const top = route.labelY;
         return `<div class="edge-label" style="left:${left}px;top:${top}px">${escapeHtml(edge.label)}</div>`;
       })
       .join("");
