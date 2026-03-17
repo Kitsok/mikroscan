@@ -18,7 +18,7 @@ from typing import List, Dict, Set
 logger = logging.getLogger(__name__)
 
 PING_COUNT = 3
-PING_WAIT_SECONDS = 0.1
+PING_WAIT_SECONDS = 1
 PING_WAIT_MILLISECONDS = 100
 
 class NetworkScanner:
@@ -66,7 +66,7 @@ class NetworkScanner:
             if self.verbose:
                 logger.info(f"Pinging {ip}...")
             
-            result = subprocess.run(cmd, capture_output=True, timeout=1.5)
+            result = subprocess.run(cmd, capture_output=True, timeout=PING_COUNT + 1)
             success = result.returncode == 0
             
             if self.verbose:
