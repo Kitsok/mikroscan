@@ -360,7 +360,7 @@ def create_api_handler(service: MikroscanAPIService):
             return self.client_address[0] in allowed_clients
 
         def log_message(self, format: str, *args):
-            logger.info("%s - %s", self.address_string(), format % args)
+            logger.debug("%s - %s", self.address_string(), format % args)
 
         def _send_json(self, code: int, payload: Dict[str, Any]):
             encoded = json.dumps(payload).encode("utf-8")
