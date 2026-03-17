@@ -96,7 +96,25 @@
   }
 
   function applyLayout(layout) {
+    const previousPositions = new Map(state.manualPositions);
     state.manualPositions = new Map();
+    previousPositions.forEach((position, nodeId) => {
+      if (!state.nodeMap.has(nodeId)) {
+        return;
+      }
+      const currentParentId = state.parentMap.get(nodeId) || "";
+      if ((position.parent_id || "") !== currentParentId) {
+        return;
+      }
+      if (Number.isFinite(position.x) && Number.isFinite(position.y)) {
+        state.manualPositions.set(nodeId, {
+          x: position.x,
+          y: position.y,
+          parent_id: currentParentId,
+        });
+      }
+    });
+
     const positions = layout?.positions || {};
     Object.entries(positions).forEach(([nodeId, position]) => {
       if (!state.nodeMap.has(nodeId) || typeof position !== "object") {
@@ -111,10 +129,13 @@
       if (savedParentId !== currentParentId) {
         return;
       }
+      if (state.manualPositions.has(nodeId)) {
+        return;
+      }
       const x = Number(position.x);
       const y = Number(position.y);
       if (Number.isFinite(x) && Number.isFinite(y)) {
-        state.manualPositions.set(nodeId, { x, y });
+        state.manualPositions.set(nodeId, { x, y, parent_id: currentParentId });
       }
     });
   }
@@ -239,9 +260,8 @@
       const autoX = (baseColumns.get(item.depth) + columnInDepth) * H_SPACING;
       const autoY = rowInDepth * V_SPACING;
       const savedPosition = state.manualPositions.get(item.id);
-      const isStableMikrotik = item.data.kind === "device" && item.data.type === "mikrotik";
 
-      if (isStableMikrotik && savedPosition) {
+      if (savedPosition) {
         item.x = savedPosition.x;
         item.y = savedPosition.y;
         return;
@@ -710,6 +730,7 @@
       state.manualPositions.set(state.drag.nodeId, {
         x: state.drag.base.x + dx / state.viewScale,
         y: state.drag.base.y + dy / state.viewScale,
+        parent_id: state.parentMap.get(state.drag.nodeId) || "",
       });
       renderCanvas();
       renderDetails();

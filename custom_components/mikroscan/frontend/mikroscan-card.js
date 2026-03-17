@@ -313,7 +313,25 @@ class MikroscanMapBase extends HTMLElement {
   }
 
   _applyLayout(layout) {
+    const previousPositions = new Map(this._state.manualPositions);
     this._state.manualPositions = new Map();
+    previousPositions.forEach((position, nodeId) => {
+      if (!this._state.nodeMap.has(nodeId)) {
+        return;
+      }
+      const currentParentId = this._state.parentMap.get(nodeId) || "";
+      if ((position.parent_id || "") !== currentParentId) {
+        return;
+      }
+      if (Number.isFinite(position.x) && Number.isFinite(position.y)) {
+        this._state.manualPositions.set(nodeId, {
+          x: position.x,
+          y: position.y,
+          parent_id: currentParentId,
+        });
+      }
+    });
+
     Object.entries(layout?.positions || {}).forEach(([nodeId, position]) => {
       if (!this._state.nodeMap.has(nodeId) || typeof position !== "object") {
         return;
@@ -327,10 +345,17 @@ class MikroscanMapBase extends HTMLElement {
       if (savedParentId !== currentParentId) {
         return;
       }
+      if (this._state.manualPositions.has(nodeId)) {
+        return;
+      }
       const x = Number(position.x);
       const y = Number(position.y);
       if (Number.isFinite(x) && Number.isFinite(y)) {
-        this._state.manualPositions.set(nodeId, { x, y });
+        this._state.manualPositions.set(nodeId, {
+          x,
+          y,
+          parent_id: currentParentId,
+        });
       }
     });
   }
@@ -401,22 +426,21 @@ class MikroscanMapBase extends HTMLElement {
       }
 
       const savedPosition = this._state.manualPositions.get(nodeRef.node_id);
-      const isStableMikrotik = data.kind === "device" && data.type === "mikrotik";
       const autoX = depth * H_SPACING;
       const autoY = y;
       items.push({
         id: nodeRef.node_id,
         nodeRef,
         data,
-        x: isStableMikrotik && savedPosition ? savedPosition.x : autoX,
-        y: isStableMikrotik && savedPosition ? savedPosition.y : autoY,
+        x: savedPosition ? savedPosition.x : autoX,
+        y: savedPosition ? savedPosition.y : autoY,
       });
 
       if (parentId) {
         edges.push({ from: parentId, to: nodeRef.node_id });
       }
 
-      return isStableMikrotik && savedPosition ? savedPosition.y : autoY;
+      return savedPosition ? savedPosition.y : autoY;
     };
 
     (this._state.topology?.roots || []).forEach((root) => {
@@ -549,6 +573,7 @@ class MikroscanMapBase extends HTMLElement {
     this._state.manualPositions.set(this._state.drag.nodeId, {
       x: this._state.drag.base.x + dx / this._state.viewScale,
       y: this._state.drag.base.y + dy / this._state.viewScale,
+      parent_id: this._state.parentMap.get(this._state.drag.nodeId) || "",
     });
     this._render();
   }
