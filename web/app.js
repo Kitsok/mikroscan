@@ -3,6 +3,7 @@
     topology: null,
     status: null,
     nodeMap: new Map(),
+    visibleTree: [],
     treeNodes: [],
     selectedId: null,
     collapsed: new Set(),
@@ -12,19 +13,23 @@
     viewScale: 1,
   };
 
-  const H_SPACING = 214;
-  const V_SPACING = 76;
-  const NODE_WIDTH = 164;
-  const NODE_HEIGHT = 52;
-  const PADDING = 48;
+  const VISIBLE_INTERFACE_TYPES = new Set(["vlan", "pppoe-out", "wg", "zerotier"]);
+  const H_SPACING = 220;
+  const V_SPACING = 92;
+  const NODE_WIDTH = 172;
+  const NODE_HEIGHT = 54;
+  const PADDING = 56;
 
   const elements = {
     buildId: document.getElementById("build-id"),
     mapTitle: document.getElementById("map-title"),
+    statusSummary: document.getElementById("status-summary"),
     nodeLayer: document.getElementById("node-layer"),
     edgeLayer: document.getElementById("edge-layer"),
+    edgeLabelLayer: document.getElementById("edge-label-layer"),
     canvasWrapper: document.getElementById("canvas-wrapper"),
-    statusGrid: document.getElementById("status-grid"),
+    detailsDrawer: document.getElementById("details-drawer"),
+    closeDrawer: document.getElementById("close-drawer"),
     nodeDetails: document.getElementById("node-details"),
     unresolvedHosts: document.getElementById("unresolved-hosts"),
     refreshTopology: document.getElementById("refresh-topology"),
@@ -59,10 +64,7 @@
   function serializePositions() {
     const positions = {};
     state.manualPositions.forEach((position, nodeId) => {
-      positions[nodeId] = {
-        dx: position.dx,
-        dy: position.dy,
-      };
+      positions[nodeId] = { dx: position.dx, dy: position.dy };
     });
     return { positions };
   }
@@ -71,15 +73,14 @@
     state.manualPositions = new Map();
     const positions = layout?.positions || {};
     Object.entries(positions).forEach(([nodeId, position]) => {
-      if (!state.nodeMap.has(nodeId) || !position || typeof position !== "object") {
+      if (!state.nodeMap.has(nodeId) || typeof position !== "object") {
         return;
       }
       const dx = Number(position.dx);
       const dy = Number(position.dy);
-      if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
-        return;
+      if (Number.isFinite(dx) && Number.isFinite(dy)) {
+        state.manualPositions.set(nodeId, { dx, dy });
       }
-      state.manualPositions.set(nodeId, { dx, dy });
     });
   }
 
@@ -87,33 +88,64 @@
     return state.nodeMap.get(nodeId) || { id: nodeId, label: nodeId, kind: "unknown" };
   }
 
-  function buildDisplayLabel(nodeRef) {
-    const data = getNodeData(nodeRef.node_id);
-    const bits = [];
-    if (nodeRef.remote_interface) {
-      bits.push(`<${nodeRef.remote_interface}>`);
-    }
-    bits.push(data.label || data.name || nodeRef.node_id);
-    return bits.join(" ");
+  function shouldRenderInterfaceNode(data) {
+    return data.kind === "interface" && VISIBLE_INTERFACE_TYPES.has(data.type || "");
   }
 
-  function buildMetaLines(nodeRef) {
-    const data = getNodeData(nodeRef.node_id);
-    const lines = [];
+  function displayNameForNode(data) {
+    if (data.kind === "interface") {
+      return data.name || data.label || data.id;
+    }
+    return data.label || data.name || data.id;
+  }
 
-    if (data.ip) {
-      lines.push(data.ip);
+  function interfaceEdgeName(data) {
+    return data.name || data.label || "";
+  }
+
+  function buildEdgeLabel(localPort, remotePort) {
+    if (localPort && remotePort) {
+      return `${localPort} \u2192 ${remotePort}`;
     }
-    if (nodeRef.display_mac || data.mac) {
-      lines.push(nodeRef.display_mac || data.mac);
+    return localPort || remotePort || "";
+  }
+
+  function createVisibleNode(nodeRef, edgeLabel = "") {
+    return {
+      id: nodeRef.node_id,
+      nodeRef,
+      data: getNodeData(nodeRef.node_id),
+      edgeLabel,
+      children: [],
+    };
+  }
+
+  function attachVisibleChild(parent, nodeRef, localPort = "") {
+    const data = getNodeData(nodeRef.node_id);
+    const collapsed = data.kind !== "interface" && state.collapsed.has(nodeRef.node_id);
+    const children = collapsed ? [] : (nodeRef.children || []);
+
+    if (data.kind === "interface" && !shouldRenderInterfaceNode(data)) {
+      const nextLocalPort = interfaceEdgeName(data) || localPort;
+      children.forEach((child) => attachVisibleChild(parent, child, nextLocalPort));
+      return;
     }
-    if (data.type && data.kind === "interface") {
-      lines.push(data.type);
-    }
-    if (nodeRef.already_shown) {
-      lines.push("already shown");
-    }
-    return lines;
+
+    const childNode = createVisibleNode(
+      nodeRef,
+      buildEdgeLabel(localPort, nodeRef.remote_interface || ""),
+    );
+    children.forEach((child) => attachVisibleChild(childNode, child, ""));
+    parent.children.push(childNode);
+  }
+
+  function buildVisibleTree() {
+    const roots = state.topology?.roots || [];
+    state.visibleTree = roots.map((root) => {
+      const visibleRoot = createVisibleNode(root, "");
+      (root.children || []).forEach((child) => attachVisibleChild(visibleRoot, child, ""));
+      return visibleRoot;
+    });
   }
 
   function flattenTree() {
@@ -121,47 +153,40 @@
     const edges = [];
     let nextLeafY = 0;
 
-    function visit(nodeRef, depth, parentId) {
-      const data = getNodeData(nodeRef.node_id);
-      const children = state.collapsed.has(nodeRef.node_id) ? [] : (nodeRef.children || []);
-      const localId = nodeRef.node_id;
+    function visit(node, depth, parentId) {
+      const children = node.children || [];
       let y;
 
       if (!children.length) {
         y = nextLeafY;
         nextLeafY += V_SPACING;
       } else {
-        const childYs = [];
-        children.forEach((child) => {
-          childYs.push(visit(child, depth + 1, localId));
-        });
+        const childYs = children.map((child) => visit(child, depth + 1, node.id));
         y = childYs.reduce((sum, value) => sum + value, 0) / childYs.length;
       }
 
-      const computedX = depth * H_SPACING;
-      const position = state.manualPositions.get(localId);
-      const x = computedX + (position ? position.dx : 0);
-      const adjustedY = y + (position ? position.dy : 0);
+      const offset = state.manualPositions.get(node.id) || { dx: 0, dy: 0 };
+      const x = depth * H_SPACING + offset.dx;
+      const adjustedY = y + offset.dy;
 
       items.push({
-        id: localId,
-        nodeRef,
-        data,
-        depth,
+        id: node.id,
+        nodeRef: node.nodeRef,
+        data: node.data,
+        edgeLabel: node.edgeLabel,
         x,
         y: adjustedY,
       });
 
       if (parentId) {
-        edges.push({ from: parentId, to: localId });
+        edges.push({ from: parentId, to: node.id, label: node.edgeLabel });
       }
 
       return adjustedY;
     }
 
-    const roots = state.topology?.roots || [];
     let rootOffset = 0;
-    roots.forEach((root) => {
+    state.visibleTree.forEach((root) => {
       nextLeafY = Math.max(nextLeafY, rootOffset);
       visit(root, 0, null);
       rootOffset = nextLeafY + V_SPACING;
@@ -171,22 +196,35 @@
     return { items, edges };
   }
 
+  function buildNodePills(item) {
+    const lines = [];
+    if (item.data.ip) {
+      lines.push(item.data.ip);
+    }
+    if (item.data.kind === "segment") {
+      lines.push(item.data.type || "segment");
+    }
+    if (item.data.kind === "interface" && item.data.type) {
+      lines.push(item.data.type);
+    }
+    if (item.nodeRef.already_shown) {
+      lines.push("already shown");
+    }
+    return lines
+      .map((line) => `<span class="pill">${escapeHtml(line)}</span>`)
+      .join("");
+  }
+
   function renderStatus() {
     const status = state.status || {};
-    const rows = [
-      ["Current", status.current_action || "idle"],
-      ["Last action", status.last_action || "none"],
-      ["Last success", status.last_success === null ? "unknown" : String(status.last_success)],
-      ["Last error", status.last_error || "none"],
-      ["Nodes", status.topology?.node_count ?? 0],
-      ["Edges", status.topology?.edge_count ?? 0],
-      ["Roots", status.topology?.root_count ?? 0],
-      ["Unresolved", status.topology?.unresolved_host_count ?? 0],
-    ];
+    const topology = state.topology || {};
+    const deviceCount = (topology.nodes || []).filter((node) => node.kind === "device").length;
+    const hostCount = (topology.nodes || []).filter((node) => node.kind === "host").length;
+    const unresolved = status.topology?.unresolved_host_count ?? 0;
+    const mode = status.running ? `running ${status.current_action}` : "idle";
 
-    elements.statusGrid.innerHTML = rows
-      .map(([term, value]) => `<dt>${escapeHtml(term)}</dt><dd>${escapeHtml(value)}</dd>`)
-      .join("");
+    elements.statusSummary.textContent =
+      `${mode} • ${deviceCount} devices • ${hostCount} hosts • ${unresolved} unresolved`;
 
     const busy = Boolean(status.running);
     elements.generateTopology.disabled = busy;
@@ -198,27 +236,30 @@
 
   function renderDetails() {
     if (!state.selectedId) {
+      elements.detailsDrawer.classList.remove("open");
       elements.nodeDetails.textContent = "Click a node to inspect it.";
       return;
     }
 
     const item = state.treeNodes.find((entry) => entry.id === state.selectedId);
     if (!item) {
-      elements.nodeDetails.textContent = "Selected node is not visible in the current tree.";
+      elements.detailsDrawer.classList.remove("open");
+      elements.nodeDetails.textContent = "Selected node is not visible.";
       return;
     }
 
     const details = {
-      id: item.id,
+      label: displayNameForNode(item.data),
       kind: item.data.kind,
       type: item.data.type || "",
-      label: item.data.label || "",
       ip: item.data.ip || "",
       mac: item.nodeRef.display_mac || item.data.mac || "",
       device: item.data.device || "",
+      edge: item.edgeLabel || "",
       remote_interface: item.nodeRef.remote_interface || "",
       hostname: item.data.hostname || "",
       running: item.data.running || "",
+      port: item.data.port || "",
       already_shown: item.nodeRef.already_shown ? "true" : "",
     };
 
@@ -228,6 +269,7 @@
       .join("");
 
     elements.nodeDetails.innerHTML = `<dl>${rows}</dl>`;
+    elements.detailsDrawer.classList.add("open");
   }
 
   function renderUnresolvedHosts() {
@@ -248,6 +290,7 @@
   }
 
   function renderCanvas() {
+    buildVisibleTree();
     const { items, edges } = flattenTree();
     const width = Math.max(...items.map((item) => item.x), 0) + NODE_WIDTH + PADDING * 2;
     const height = Math.max(...items.map((item) => item.y), 0) + NODE_HEIGHT + PADDING * 2;
@@ -261,6 +304,12 @@
     elements.nodeLayer.style.height = `${height}px`;
     elements.nodeLayer.style.transformOrigin = "top left";
     elements.nodeLayer.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+
+    elements.edgeLabelLayer.style.width = `${width}px`;
+    elements.edgeLabelLayer.style.height = `${height}px`;
+    elements.edgeLabelLayer.style.transformOrigin = "top left";
+    elements.edgeLabelLayer.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+
     elements.edgeLayer.setAttribute("width", String(width));
     elements.edgeLayer.setAttribute("height", String(height));
     elements.edgeLayer.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -294,6 +343,22 @@
       })
       .join("");
 
+    elements.edgeLabelLayer.innerHTML = edges
+      .map((edge) => {
+        if (!edge.label) {
+          return "";
+        }
+        const from = positions.get(edge.from);
+        const to = positions.get(edge.to);
+        if (!from || !to) {
+          return "";
+        }
+        const left = from.x + NODE_WIDTH + (to.x - (from.x + NODE_WIDTH)) * 0.5;
+        const top = from.y + NODE_HEIGHT / 2 + (to.y - from.y) * 0.5;
+        return `<div class="edge-label" style="left:${left}px;top:${top}px">${escapeHtml(edge.label)}</div>`;
+      })
+      .join("");
+
     elements.nodeLayer.innerHTML = "";
     items.forEach((item) => {
       const node = document.createElement("article");
@@ -301,21 +366,14 @@
       if (state.selectedId === item.id) {
         node.classList.add("selected");
       }
-      if (state.collapsed.has(item.id)) {
-        node.classList.add("collapsed");
-      }
       node.dataset.nodeId = item.id;
       node.style.left = `${item.x + PADDING}px`;
       node.style.top = `${item.y + PADDING}px`;
 
-      const meta = buildMetaLines(item.nodeRef)
-        .map((line) => `<span class="pill">${escapeHtml(line)}</span>`)
-        .join("");
-
       node.innerHTML = `
         <div class="node-kind">${escapeHtml(item.data.kind)}</div>
-        <div class="node-label">${escapeHtml(buildDisplayLabel(item.nodeRef))}</div>
-        <div class="node-meta">${meta}</div>
+        <div class="node-label">${escapeHtml(displayNameForNode(item.data))}</div>
+        <div class="node-meta">${buildNodePills(item)}</div>
       `;
 
       node.addEventListener("click", (event) => {
@@ -327,7 +385,7 @@
 
       node.addEventListener("dblclick", (event) => {
         event.stopPropagation();
-        if ((item.nodeRef.children || []).length) {
+        if ((item.nodeRef.children || []).length && item.data.kind !== "host") {
           if (state.collapsed.has(item.id)) {
             state.collapsed.delete(item.id);
           } else {
@@ -377,7 +435,7 @@
     const layout = await fetchJson("api/layout");
     applyLayout(layout);
     const generated = state.topology.generated_at || "unknown";
-    elements.mapTitle.textContent = `Current topology • ${generated}`;
+    elements.mapTitle.textContent = `Topology Map • ${generated}`;
     renderAll();
   }
 
@@ -387,22 +445,13 @@
   }
 
   async function postAction(url, payload) {
-    try {
-      const result = await fetchJson(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload || {}),
-      });
-      await loadStatus();
-      return result;
-    } catch (error) {
-      state.status = {
-        ...(state.status || {}),
-        last_error: error.message,
-      };
-      renderStatus();
-      throw error;
-    }
+    const result = await fetchJson(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    await loadStatus();
+    return result;
   }
 
   async function persistLayout() {
@@ -458,6 +507,11 @@
       renderCanvas();
       await persistLayout();
     });
+    elements.closeDrawer.addEventListener("click", () => {
+      state.selectedId = null;
+      renderDetails();
+      updateSelectedNodeClasses();
+    });
     elements.canvasWrapper.addEventListener("click", () => {
       state.selectedId = null;
       renderDetails();
@@ -475,6 +529,7 @@
         dy: state.drag.base.dy + dy / state.viewScale,
       });
       renderCanvas();
+      renderDetails();
     });
     window.addEventListener("pointerup", (event) => {
       if (state.drag && state.drag.pointerId === event.pointerId) {
@@ -496,6 +551,7 @@
       await loadTopology();
     } catch (error) {
       elements.nodeDetails.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+      elements.detailsDrawer.classList.add("open");
     }
 
     window.setInterval(async () => {
