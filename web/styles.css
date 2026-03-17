@@ -211,14 +211,14 @@ body {
 
 .topology-node {
   position: absolute;
-  min-width: 124px;
-  max-width: 180px;
+  width: 172px;
+  min-height: 54px;
   padding: 7px 9px;
   border: 1px solid var(--line);
   border-left-width: 5px;
   border-radius: 12px;
   background: var(--surface-strong);
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
+  box-shadow: none;
   pointer-events: auto;
   user-select: none;
   cursor: grab;

@@ -244,6 +244,19 @@
   }
 
   function chooseEdgeAnchors(from, to) {
+    if (to.x >= from.x + NODE_WIDTH) {
+      return { fromSide: "right", toSide: "left" };
+    }
+    if (to.x + NODE_WIDTH <= from.x) {
+      return { fromSide: "left", toSide: "right" };
+    }
+    if (to.y >= from.y + NODE_HEIGHT) {
+      return { fromSide: "bottom", toSide: "top" };
+    }
+    if (to.y + NODE_HEIGHT <= from.y) {
+      return { fromSide: "top", toSide: "bottom" };
+    }
+
     const fromCenterX = from.x + NODE_WIDTH / 2;
     const fromCenterY = from.y + NODE_HEIGHT / 2;
     const toCenterX = to.x + NODE_WIDTH / 2;
@@ -266,25 +279,12 @@
     const { fromSide, toSide } = chooseEdgeAnchors(from, to);
     const start = edgeAnchor(from, fromSide);
     const end = edgeAnchor(to, toSide);
-
-    if (fromSide === "left" || fromSide === "right") {
-      const jointX = start.x + (end.x - start.x) / 2;
-      return {
-        start,
-        end,
-        labelX: start.x + (jointX - start.x) * 0.45,
-        labelY: start.y + (end.y - start.y) * 0.2,
-        d: `M ${start.x} ${start.y} L ${jointX} ${start.y} L ${jointX} ${end.y} L ${end.x} ${end.y}`,
-      };
-    }
-
-    const jointY = start.y + (end.y - start.y) / 2;
     return {
       start,
       end,
-      labelX: start.x + (end.x - start.x) * 0.2,
-      labelY: start.y + (jointY - start.y) * 0.45,
-      d: `M ${start.x} ${start.y} L ${start.x} ${jointY} L ${end.x} ${jointY} L ${end.x} ${end.y}`,
+      labelX: start.x + (end.x - start.x) / 2,
+      labelY: start.y + (end.y - start.y) / 2,
+      d: `M ${start.x} ${start.y} L ${end.x} ${end.y}`,
     };
   }
 
