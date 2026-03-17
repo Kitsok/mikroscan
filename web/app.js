@@ -373,8 +373,12 @@
         if (!from || !to) {
           return "";
         }
-        const left = from.x + NODE_WIDTH + (to.x - (from.x + NODE_WIDTH)) * 0.5;
-        const top = from.y + NODE_HEIGHT / 2 + (to.y - from.y) * 0.5;
+        const startX = from.x + NODE_WIDTH;
+        const startY = from.y + NODE_HEIGHT / 2;
+        const endX = to.x;
+        const endY = to.y + NODE_HEIGHT / 2;
+        const left = startX + Math.min(74, Math.max(28, (endX - startX) * 0.28));
+        const top = startY + (endY - startY) * 0.24;
         return `<div class="edge-label" style="left:${left}px;top:${top}px">${escapeHtml(edge.label)}</div>`;
       })
       .join("");
