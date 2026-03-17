@@ -248,14 +248,9 @@
     const width = Math.max(...items.map((item) => item.x), 0) + NODE_WIDTH + PADDING * 2;
     const height = Math.max(...items.map((item) => item.y), 0) + NODE_HEIGHT + PADDING * 2;
     const availableWidth = Math.max(elements.canvasWrapper.clientWidth - 12, NODE_WIDTH);
-    const availableHeight = Math.max(elements.canvasWrapper.clientHeight - 12, NODE_HEIGHT);
-    const scale = Math.min(
-      1,
-      (availableWidth * 0.98) / Math.max(width, 1),
-      (availableHeight * 0.98) / Math.max(height, 1),
-    );
+    const scale = Math.max(0.85, Math.min(1, (availableWidth * 0.98) / Math.max(width, 1)));
     const offsetX = Math.max(0, (availableWidth - width * scale) / 2);
-    const offsetY = Math.max(0, (availableHeight - height * scale) / 2);
+    const offsetY = 8;
     state.viewScale = scale;
 
     elements.nodeLayer.style.width = `${width}px`;
