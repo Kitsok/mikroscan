@@ -10,6 +10,19 @@ devices.
 - keeps topology data and command logs in persistent app storage
 - can trigger live refreshes using the configured device credentials
 
+## How to use it in Home Assistant
+
+- install the Mikroscan app from `Settings -> Apps`
+- start the app
+- open `Mikroscan` from the Home Assistant side panel
+
+The side panel is the supported Home Assistant UI for the map.
+
+If you want to embed the map in a dashboard later, use a Home Assistant
+`Webpage`/`iframe` card that points at the Mikroscan ingress page or
+another reachable Mikroscan URL. A separate native Lovelace custom card
+is no longer part of the supported install flow.
+
 ## Configuration
 
 - `backend`: `api` or `ssh`

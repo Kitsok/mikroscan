@@ -16,6 +16,21 @@ project changes.
 - Generate `topology.txt` as a rooted port tree
 - Append unresolved known-but-unplaced hosts after the topology tree
 
+## Home Assistant
+
+The supported Home Assistant UI is the `Mikroscan` app/add-on side
+panel.
+
+Recommended flow:
+
+1. install the app from `Settings -> Apps`
+2. configure device credentials and scan defaults in the app options
+3. open `Mikroscan` from the Home Assistant side panel
+
+If you want a dashboard embed, use a Home Assistant `Webpage`/`iframe`
+card that points at the Mikroscan UI. The project no longer relies on a
+separate native Lovelace custom card for the map itself.
+
 ## Requirements
 
 - Python 3.8+
