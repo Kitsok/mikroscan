@@ -17,6 +17,10 @@ from typing import List, Dict, Set
 
 logger = logging.getLogger(__name__)
 
+PING_COUNT = 3
+PING_WAIT_SECONDS = 0.1
+PING_WAIT_MILLISECONDS = 100
+
 class NetworkScanner:
     """Network scanner for finding active hosts and identifying Mikrotik devices."""
     
@@ -46,14 +50,23 @@ class NetworkScanner:
         try:
             # Use system ping command
             if sys.platform.startswith('win'):
-                cmd = ['ping', '-n', '1', '-w', str(self.timeout * 1000), ip]
+                cmd = ['ping', '-n', str(PING_COUNT), '-w', str(PING_WAIT_MILLISECONDS), ip]
             else:
-                cmd = ['ping', '-c', '1', '-W', str(self.timeout), ip]
+                cmd = [
+                    'ping',
+                    '-c',
+                    str(PING_COUNT),
+                    '-i',
+                    str(PING_WAIT_SECONDS),
+                    '-W',
+                    str(PING_WAIT_SECONDS),
+                    ip,
+                ]
             
             if self.verbose:
                 logger.info(f"Pinging {ip}...")
             
-            result = subprocess.run(cmd, capture_output=True, timeout=self.timeout + 1)
+            result = subprocess.run(cmd, capture_output=True, timeout=1.5)
             success = result.returncode == 0
             
             if self.verbose:
