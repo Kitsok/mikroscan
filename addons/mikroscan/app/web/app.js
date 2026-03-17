@@ -151,49 +151,63 @@
   function flattenTree() {
     const items = [];
     const edges = [];
-    let nextLeafY = 0;
 
     function visit(node, depth, parentId) {
-      const children = node.children || [];
-      let y;
-
-      if (!children.length) {
-        y = nextLeafY;
-        nextLeafY += V_SPACING;
-      } else {
-        const childYs = children.map((child) => visit(child, depth + 1, node.id));
-        y = childYs.reduce((sum, value) => sum + value, 0) / childYs.length;
-      }
-
-      const offset = state.manualPositions.get(node.id) || { dx: 0, dy: 0 };
-      const x = depth * H_SPACING + offset.dx;
-      const adjustedY = y + offset.dy;
-
       items.push({
         id: node.id,
         nodeRef: node.nodeRef,
         data: node.data,
         edgeLabel: node.edgeLabel,
-        x,
-        y: adjustedY,
+        depth,
+        x: 0,
+        y: 0,
       });
 
       if (parentId) {
         edges.push({ from: parentId, to: node.id, label: node.edgeLabel });
       }
 
-      return adjustedY;
+      (node.children || []).forEach((child) => visit(child, depth + 1, node.id));
     }
 
-    let rootOffset = 0;
-    state.visibleTree.forEach((root) => {
-      nextLeafY = Math.max(nextLeafY, rootOffset);
-      visit(root, 0, null);
-      rootOffset = nextLeafY + V_SPACING;
-    });
-
+    state.visibleTree.forEach((root) => visit(root, 0, null));
     state.treeNodes = items;
     return { items, edges };
+  }
+
+  function applyLayeredLayout(items, availableHeight) {
+    const maxRows = Math.max(1, Math.floor((availableHeight - PADDING * 2) / V_SPACING));
+    const depthGroups = new Map();
+
+    items.forEach((item) => {
+      if (!depthGroups.has(item.depth)) {
+        depthGroups.set(item.depth, []);
+      }
+      depthGroups.get(item.depth).push(item);
+    });
+
+    const depths = Array.from(depthGroups.keys()).sort((a, b) => a - b);
+    const baseColumns = new Map();
+    let nextBaseColumn = 0;
+
+    depths.forEach((depth) => {
+      const group = depthGroups.get(depth) || [];
+      baseColumns.set(depth, nextBaseColumn);
+      nextBaseColumn += Math.max(1, Math.ceil(group.length / maxRows));
+    });
+
+    items.forEach((item) => {
+      const group = depthGroups.get(item.depth) || [];
+      const index = group.findIndex((entry) => entry.id === item.id);
+      const columnInDepth = Math.floor(index / maxRows);
+      const rowInDepth = index % maxRows;
+      const offset = state.manualPositions.get(item.id) || { dx: 0, dy: 0 };
+
+      item.x = (baseColumns.get(item.depth) + columnInDepth) * H_SPACING + offset.dx;
+      item.y = rowInDepth * V_SPACING + offset.dy;
+    });
+
+    return items;
   }
 
   function buildNodePills(item) {
@@ -293,6 +307,8 @@
   function renderCanvas() {
     buildVisibleTree();
     const { items, edges } = flattenTree();
+    const availableHeight = Math.max(elements.canvasWrapper.clientHeight - 12, NODE_HEIGHT);
+    applyLayeredLayout(items, availableHeight);
     const width = Math.max(...items.map((item) => item.x), 0) + NODE_WIDTH + PADDING * 2;
     const height = Math.max(...items.map((item) => item.y), 0) + NODE_HEIGHT + PADDING * 2;
     const availableWidth = Math.max(elements.canvasWrapper.clientWidth - 12, NODE_WIDTH);
@@ -339,8 +355,7 @@
         const startY = from.y + NODE_HEIGHT / 2;
         const endX = to.x;
         const endY = to.y + NODE_HEIGHT / 2;
-        const midX = startX + (endX - startX) * 0.42;
-        return `<path class="edge-line" d="M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}" />`;
+        return `<path class="edge-line" d="M ${startX} ${startY} L ${endX} ${endY}" />`;
       })
       .join("");
 
