@@ -11,6 +11,7 @@
     drag: null,
     saveLayoutTimer: null,
     viewScale: 1,
+    zoomMultiplier: 1,
   };
 
   const VISIBLE_INTERFACE_TYPES = new Set(["vlan", "pppoe-out", "wg", "zerotier"]);
@@ -312,7 +313,8 @@
     const width = Math.max(...items.map((item) => item.x), 0) + NODE_WIDTH + PADDING * 2;
     const height = Math.max(...items.map((item) => item.y), 0) + NODE_HEIGHT + PADDING * 2;
     const availableWidth = Math.max(elements.canvasWrapper.clientWidth - 12, NODE_WIDTH);
-    const scale = Math.max(0.85, Math.min(1, (availableWidth * 0.98) / Math.max(width, 1)));
+    const fitScale = Math.max(0.85, Math.min(1, (availableWidth * 0.98) / Math.max(width, 1)));
+    const scale = Math.max(0.5, Math.min(2.5, fitScale * state.zoomMultiplier));
     const offsetX = Math.max(0, (availableWidth - width * scale) / 2);
     const offsetY = 8;
     state.viewScale = scale;
@@ -355,7 +357,9 @@
         const startY = from.y + NODE_HEIGHT / 2;
         const endX = to.x;
         const endY = to.y + NODE_HEIGHT / 2;
-        return `<path class="edge-line" d="M ${startX} ${startY} L ${endX} ${endY}" />`;
+        const jointX = startX + 12;
+        const elbowX = Math.max(jointX, startX + Math.max(18, (endX - startX) * 0.45));
+        return `<path class="edge-line" d="M ${startX} ${startY} L ${jointX} ${startY} L ${elbowX} ${startY} L ${elbowX} ${endY} L ${endX} ${endY}" />`;
       })
       .join("");
 
@@ -520,6 +524,7 @@
     elements.scanNetwork.addEventListener("click", handleScan);
     elements.resetLayout.addEventListener("click", async () => {
       state.manualPositions = new Map();
+      state.zoomMultiplier = 1;
       renderCanvas();
       await persistLayout();
     });
@@ -561,6 +566,16 @@
         renderCanvas();
       }
     });
+    elements.canvasWrapper.addEventListener(
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        const direction = event.deltaY < 0 ? 1.1 : 0.9;
+        state.zoomMultiplier = Math.max(0.6, Math.min(3, state.zoomMultiplier * direction));
+        renderCanvas();
+      },
+      { passive: false },
+    );
 
     try {
       await loadStatus();

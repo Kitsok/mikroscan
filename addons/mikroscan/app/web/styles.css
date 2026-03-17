@@ -178,10 +178,16 @@ body {
   pointer-events: none;
 }
 
+.edge-layer {
+  overflow: visible;
+}
+
 .edge-line {
   stroke: color-mix(in srgb, var(--muted) 48%, transparent);
   stroke-width: 2;
   fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .edge-label {
