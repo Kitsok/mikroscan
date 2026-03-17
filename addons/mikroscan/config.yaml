@@ -1,7 +1,7 @@
 name: "Mikroscan"
 description: >-
   Interactive MikroTik topology mapping UI and live refresh service.
-version: "0.1.11"
+version: "0.1.12"
 slug: "mikroscan"
 url: "https://github.com/kitsok/mikroscan"
 startup: application
@@ -21,6 +21,7 @@ options:
   backend: api
   api_port: 8728
   ssh_port: 22
+  refresh_interval: 60
   api_ssl: false
   verbose: false
   device_username: ""
@@ -29,6 +30,7 @@ schema:
   backend: list(api|ssh)
   api_port: port
   ssh_port: port
+  refresh_interval: int(0,)
   api_ssl: bool
   verbose: bool
   device_username: str?

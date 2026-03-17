@@ -12,6 +12,8 @@
     saveLayoutTimer: null,
     viewScale: 1,
     zoomMultiplier: 1,
+    topologyGeneratedAt: "",
+    parentMap: new Map(),
   };
 
   const VISIBLE_INTERFACE_TYPES = new Set(["vlan", "pppoe-out", "wg", "zerotier"]);
@@ -65,9 +67,28 @@
   function serializePositions() {
     const positions = {};
     state.manualPositions.forEach((position, nodeId) => {
-      positions[nodeId] = { dx: position.dx, dy: position.dy };
+      const data = getNodeData(nodeId);
+      if (data.kind !== "device" || data.type !== "mikrotik") {
+        return;
+      }
+      positions[nodeId] = {
+        dx: position.dx,
+        dy: position.dy,
+        parent_id: state.parentMap.get(nodeId) || "",
+      };
     });
     return { positions };
+  }
+
+  function buildParentMap() {
+    const parentMap = new Map();
+    function walk(item, parentId = "") {
+      parentMap.set(item.node_id, parentId);
+      (item.children || []).forEach((child) => walk(child, item.node_id));
+    }
+    (state.topology?.roots || []).forEach((root) => walk(root, ""));
+    (state.topology?.unreached_roots || []).forEach((root) => walk(root, ""));
+    state.parentMap = parentMap;
   }
 
   function applyLayout(layout) {
@@ -75,6 +96,15 @@
     const positions = layout?.positions || {};
     Object.entries(positions).forEach(([nodeId, position]) => {
       if (!state.nodeMap.has(nodeId) || typeof position !== "object") {
+        return;
+      }
+      const data = getNodeData(nodeId);
+      if (data.kind !== "device" || data.type !== "mikrotik") {
+        return;
+      }
+      const savedParentId = String(position.parent_id || "");
+      const currentParentId = state.parentMap.get(nodeId) || "";
+      if (savedParentId !== currentParentId) {
         return;
       }
       const dx = Number(position.dx);
@@ -213,6 +243,9 @@
 
   function buildNodePills(item) {
     const lines = [];
+    if (item.data.offline) {
+      lines.push("offline");
+    }
     if (item.data.ip) {
       lines.push(item.data.ip);
     }
@@ -436,6 +469,9 @@
     items.forEach((item) => {
       const node = document.createElement("article");
       node.className = `topology-node ${item.data.kind}`;
+      if (item.data.offline) {
+        node.classList.add("offline");
+      }
       if (state.selectedId === item.id) {
         node.classList.add("selected");
       }
@@ -505,9 +541,11 @@
   async function loadTopology() {
     state.topology = await fetchJson("api/topology");
     buildNodeIndex(state.topology);
+    buildParentMap();
     const layout = await fetchJson("api/layout");
     applyLayout(layout);
-    const generated = state.topology.generated_at || "unknown";
+    state.topologyGeneratedAt = state.topology.generated_at || "";
+    const generated = state.topologyGeneratedAt || "unknown";
     elements.mapTitle.textContent = `Topology Map • ${generated}`;
     renderAll();
   }
@@ -558,14 +596,24 @@
   async function handleGenerateTopology() {
     await postAction("api/generate-topology");
     await waitForIdle();
-    await loadTopology();
+    await loadStatus();
+    if (state.status.last_success) {
+      await loadTopology();
+      return;
+    }
+    throw new Error(state.status.last_error || "topology generation failed");
   }
 
   async function handleScan() {
     const ipRange = elements.scanRange.value.trim();
     await postAction("api/scan", ipRange ? { ip_range: ipRange } : {});
     await waitForIdle();
-    await loadTopology();
+    await loadStatus();
+    if (state.status.last_success) {
+      await loadTopology();
+      return;
+    }
+    throw new Error(state.status.last_error || "scan failed");
   }
 
   async function initialize() {
@@ -573,8 +621,22 @@
       await loadStatus();
       await loadTopology();
     });
-    elements.generateTopology.addEventListener("click", handleGenerateTopology);
-    elements.scanNetwork.addEventListener("click", handleScan);
+    elements.generateTopology.addEventListener("click", async () => {
+      try {
+        await handleGenerateTopology();
+      } catch (error) {
+        elements.nodeDetails.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+        elements.detailsDrawer.classList.add("open");
+      }
+    });
+    elements.scanNetwork.addEventListener("click", async () => {
+      try {
+        await handleScan();
+      } catch (error) {
+        elements.nodeDetails.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+        elements.detailsDrawer.classList.add("open");
+      }
+    });
     elements.resetLayout.addEventListener("click", async () => {
       state.manualPositions = new Map();
       state.zoomMultiplier = 1;
@@ -641,6 +703,14 @@
     window.setInterval(async () => {
       try {
         await loadStatus();
+        const generatedAt = state.status?.topology?.generated_at || "";
+        if (
+          generatedAt &&
+          generatedAt !== state.topologyGeneratedAt &&
+          !state.status.running
+        ) {
+          await loadTopology();
+        }
       } catch (_error) {
         return;
       }

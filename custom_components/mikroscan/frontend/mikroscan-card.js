@@ -79,6 +79,11 @@ const CARD_STYLE = `
   .node.interface { border-left: 6px solid #9a5d1d; }
   .node.host { border-left: 6px solid #567d2b; }
   .node.segment { border-left: 6px solid #74408f; }
+  .node.offline {
+    opacity: 0.64;
+    border-color: color-mix(in srgb, var(--secondary-text-color) 50%, var(--divider-color));
+    border-left-color: var(--secondary-text-color);
+  }
   .kind {
     font-size: 0.6rem;
     text-transform: uppercase;
@@ -145,8 +150,11 @@ class MikroscanMapBase extends HTMLElement {
       drag: null,
       saveTimer: null,
       viewScale: 1,
+      topologyGeneratedAt: "",
+      parentMap: new Map(),
     };
     this._resizeObserver = null;
+    this._pollTimer = null;
   }
 
   setConfig(config) {
@@ -227,6 +235,31 @@ class MikroscanMapBase extends HTMLElement {
       });
       this._resizeObserver.observe(this._canvasEl);
     }
+
+    if (this._pollTimer) {
+      window.clearInterval(this._pollTimer);
+    }
+    this._pollTimer = window.setInterval(async () => {
+      if (!this._hass) {
+        return;
+      }
+      try {
+        const status = await this._callApi("GET", "api/mikroscan/status");
+        this._state.status = status;
+        const generatedAt = status.topology?.generated_at || "";
+        if (
+          generatedAt &&
+          generatedAt !== this._state.topologyGeneratedAt &&
+          !status.running
+        ) {
+          await this._loadAll();
+          return;
+        }
+        this._render();
+      } catch (_error) {
+        return;
+      }
+    }, 5000);
   }
 
   async _callApi(method, path, body) {
@@ -254,15 +287,37 @@ class MikroscanMapBase extends HTMLElement {
     ]);
     this._state.status = status;
     this._state.topology = topology;
+    this._state.topologyGeneratedAt = topology.generated_at || "";
     this._state.nodeMap = new Map((topology.nodes || []).map((node) => [node.id, node]));
+    this._buildParentMap();
     this._applyLayout(layout);
     this._render();
+  }
+
+  _buildParentMap() {
+    const parentMap = new Map();
+    const walk = (item, parentId = "") => {
+      parentMap.set(item.node_id, parentId);
+      (item.children || []).forEach((child) => walk(child, item.node_id));
+    };
+    (this._state.topology?.roots || []).forEach((root) => walk(root, ""));
+    (this._state.topology?.unreached_roots || []).forEach((root) => walk(root, ""));
+    this._state.parentMap = parentMap;
   }
 
   _applyLayout(layout) {
     this._state.manualPositions = new Map();
     Object.entries(layout?.positions || {}).forEach(([nodeId, position]) => {
       if (!this._state.nodeMap.has(nodeId) || typeof position !== "object") {
+        return;
+      }
+      const data = this._state.nodeMap.get(nodeId) || {};
+      if (data.kind !== "device" || data.type !== "mikrotik") {
+        return;
+      }
+      const savedParentId = String(position.parent_id || "");
+      const currentParentId = this._state.parentMap.get(nodeId) || "";
+      if (savedParentId !== currentParentId) {
         return;
       }
       const dx = Number(position.dx);
@@ -276,7 +331,15 @@ class MikroscanMapBase extends HTMLElement {
   _serializeLayout() {
     const positions = {};
     this._state.manualPositions.forEach((position, nodeId) => {
-      positions[nodeId] = { dx: position.dx, dy: position.dy };
+      const data = this._state.nodeMap.get(nodeId) || {};
+      if (data.kind !== "device" || data.type !== "mikrotik") {
+        return;
+      }
+      positions[nodeId] = {
+        dx: position.dx,
+        dy: position.dy,
+        parent_id: this._state.parentMap.get(nodeId) || "",
+      };
     });
     return { positions };
   }
@@ -297,6 +360,7 @@ class MikroscanMapBase extends HTMLElement {
   _buildMetaLines(nodeRef) {
     const data = this._state.nodeMap.get(nodeRef.node_id) || {};
     const lines = [];
+    if (data.offline) lines.push("offline");
     if (data.ip) lines.push(data.ip);
     if (nodeRef.display_mac || data.mac) lines.push(nodeRef.display_mac || data.mac);
     if (data.type && data.kind === "interface") lines.push(data.type);
@@ -387,6 +451,7 @@ class MikroscanMapBase extends HTMLElement {
     items.forEach((item) => {
       const node = document.createElement("article");
       node.className = `node ${item.data.kind}`;
+      if (item.data.offline) node.classList.add("offline");
       if (this._state.selectedId === item.id) node.classList.add("selected");
       node.style.left = `${item.x + PADDING}px`;
       node.style.top = `${item.y + PADDING}px`;

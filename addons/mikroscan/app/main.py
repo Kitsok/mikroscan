@@ -24,6 +24,7 @@ DEFAULT_DATA_FILE = "data/collected_data.json"
 DEFAULT_SCAN_FILE = "data/scan_results.json"
 DEFAULT_TOPOLOGY_JSON_FILE = "data/topology_graph.json"
 DEFAULT_LAYOUT_FILE = "data/topology_layout.json"
+DEFAULT_REFRESH_INTERVAL = 0
 
 class MikrotikMapper:
     """Main application class for Mikrotik network mapping."""
@@ -332,6 +333,8 @@ class MikrotikMapper:
                          key_file: str = None, port: int = 8728, timeout: int = 5,
                          verbose: bool = False, backend: str = "api",
                          use_api_ssl: bool = False,
+                         scan_output_file: str = DEFAULT_SCAN_FILE,
+                         data_output_file: str = DEFAULT_DATA_FILE,
                          output_file: str = "data/final_map.json",
                          readable_file: str = "data/connections.txt",
                          topology_file: str = "data/topology.txt",
@@ -349,6 +352,8 @@ class MikrotikMapper:
             verbose (bool): Enable verbose output
             backend (str): Collection backend
             use_api_ssl (bool): Use TLS with the RouterOS API backend
+            scan_output_file (str): File to save scan results
+            data_output_file (str): File to save collected device data
             output_file (str): File to save connection map (JSON)
             readable_file (str): File to save human-readable connections
             topology_file (str): File to save generated topology
@@ -362,7 +367,7 @@ class MikrotikMapper:
         # Step 1: Scan network
         devices = self.scan_network(
             ip_range=ip_range,
-            output_file="data/scan_results.json",
+            output_file=scan_output_file,
             timeout=timeout,
             verbose=verbose
         )
@@ -373,11 +378,11 @@ class MikrotikMapper:
         
         # Step 2: Collect data
         data = self.collect_data(
-            device_file="data/scan_results.json",
+            device_file=scan_output_file,
             username=username,
             password=password,
             key_file=key_file,
-            output_file="data/collected_data.json",
+            output_file=data_output_file,
             port=port,
             timeout=timeout + 5,  # Give more time for data collection
             backend=backend,
@@ -390,7 +395,7 @@ class MikrotikMapper:
         
         # Step 3: Build map
         connection_map = self.build_map(
-            data_file="data/collected_data.json",
+            data_file=data_output_file,
             output_file=output_file,
             readable_file=readable_file
         )
@@ -399,7 +404,7 @@ class MikrotikMapper:
             return {}
 
         topology_generated = self.generate_topology(
-            data_file=DEFAULT_DATA_FILE,
+            data_file=data_output_file,
             output_file=topology_file,
             json_output_file=topology_json_file,
         )
@@ -562,6 +567,13 @@ Examples:
         default=8080,
         help="Port for the local HTTP API server (default: 8080)"
     )
+
+    parser.add_argument(
+        "--refresh-interval",
+        type=int,
+        default=DEFAULT_REFRESH_INTERVAL,
+        help="Automatic known-device refresh interval in seconds (default: 0, disabled)"
+    )
     
     parser.add_argument(
         "--timeout",
@@ -719,6 +731,7 @@ Examples:
                 timeout=args.timeout,
                 verbose=args.verbose,
                 use_api_ssl=args.api_ssl,
+                refresh_interval=args.refresh_interval,
             )
             server = MikroscanAPIServer(args.host, args.web_port, service)
             server.serve_forever()
@@ -770,6 +783,8 @@ Examples:
                 verbose=args.verbose,
                 backend=args.backend,
                 use_api_ssl=args.api_ssl,
+                scan_output_file=args.scan_file or DEFAULT_SCAN_FILE,
+                data_output_file=args.data_file or DEFAULT_DATA_FILE,
                 output_file=args.output,
                 readable_file=args.readable_output,
                 topology_file="data/topology.txt",

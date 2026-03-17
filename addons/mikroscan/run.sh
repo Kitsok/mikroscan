@@ -14,6 +14,7 @@ ln -s "${PERSIST_ROOT}/logs" "${APP_DIR}/logs"
 BACKEND="$(bashio::config 'backend')"
 API_PORT="$(bashio::config 'api_port')"
 SSH_PORT="$(bashio::config 'ssh_port')"
+REFRESH_INTERVAL="$(bashio::config 'refresh_interval')"
 API_SSL="$(bashio::config 'api_ssl')"
 VERBOSE="$(bashio::config 'verbose')"
 DEVICE_USERNAME="$(bashio::config 'device_username')"
@@ -34,6 +35,7 @@ ARGS=(
   "--serve"
   "--host" "0.0.0.0"
   "--web-port" "8099"
+  "--refresh-interval" "${REFRESH_INTERVAL}"
   "--backend" "${BACKEND}"
 )
 

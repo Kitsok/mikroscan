@@ -232,6 +232,12 @@ body {
 .topology-node.host { border-left-color: var(--host); }
 .topology-node.segment { border-left-color: var(--segment); }
 .topology-node.interface { border-left-color: var(--logical); }
+.topology-node.offline {
+  opacity: 0.64;
+  border-color: color-mix(in srgb, var(--muted) 60%, var(--line));
+  border-left-color: var(--muted);
+  color: color-mix(in srgb, var(--ink) 72%, var(--muted));
+}
 
 .node-kind {
   margin-bottom: 2px;

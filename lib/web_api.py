@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
 
+from lib.topology_builder import TopologyBuilder
 
 logger = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -42,6 +43,7 @@ class MikroscanAPIService:
         timeout: int,
         verbose: bool,
         use_api_ssl: bool,
+        refresh_interval: int = 0,
     ):
         self.mapper = mapper
         self.scan_file = scan_file
@@ -59,9 +61,12 @@ class MikroscanAPIService:
         self.timeout = timeout
         self.verbose = verbose
         self.use_api_ssl = use_api_ssl
+        self.refresh_interval = max(0, int(refresh_interval))
 
         self._status_lock = threading.Lock()
         self._worker_thread: threading.Thread | None = None
+        self._scheduler_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
         self._status = {
             "running": False,
             "current_action": "",
@@ -172,12 +177,195 @@ class MikroscanAPIService:
         status["app_version"] = self._app_version()
         status["scan_file"] = self.scan_file
         status["data_file"] = self.data_file
+        status["auto_refresh_interval"] = self.refresh_interval
+        status["auto_refresh_enabled"] = self.refresh_interval > 0
         return status
 
     def load_topology_model(self) -> Dict[str, Any]:
         """Load the current structured topology JSON."""
         with open(self.topology_json_output, "r") as handle:
             return json.load(handle)
+
+    def _load_topology_model_if_exists(self) -> Dict[str, Any] | None:
+        """Load an existing topology model if present."""
+        if not os.path.exists(self.topology_json_output):
+            return None
+        try:
+            return self.load_topology_model()
+        except Exception as exc:
+            logger.debug("Unable to load existing topology model: %s", exc)
+            return None
+
+    def _save_topology_outputs(self, topology_model: Dict[str, Any]) -> None:
+        """Persist structured and text topology artifacts."""
+        output_dir = os.path.dirname(self.topology_json_output)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        with open(self.topology_json_output, "w") as handle:
+            json.dump(topology_model, handle, indent=2)
+
+        builder = TopologyBuilder()
+        lines = builder.render_topology_model_text(topology_model)
+        topology_dir = os.path.dirname(self.topology_output)
+        if topology_dir:
+            os.makedirs(topology_dir, exist_ok=True)
+        with open(self.topology_output, "w") as handle:
+            handle.write("\n".join(lines))
+
+    def _iter_tree_items(
+        self,
+        roots: list[Dict[str, Any]],
+        *,
+        section: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Index tree items with their parent and section."""
+        indexed: Dict[str, Dict[str, Any]] = {}
+
+        def walk(item: Dict[str, Any], parent_id: str | None, depth: int) -> None:
+            indexed[item["node_id"]] = {
+                "item": item,
+                "parent_id": parent_id,
+                "depth": depth,
+                "section": section,
+            }
+            for child in item.get("children", []):
+                walk(child, item["node_id"], depth + 1)
+
+        for root in roots:
+            walk(root, None, 0)
+        return indexed
+
+    def _merge_offline_devices(
+        self,
+        previous_model: Dict[str, Any] | None,
+        current_model: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Retain missing managed devices as offline nodes in the new topology."""
+        if not previous_model:
+            return current_model
+
+        current_nodes_by_id = {
+            node["id"]: dict(node)
+            for node in current_model.get("nodes", [])
+        }
+        edges_by_key = {
+            (
+                edge.get("from"),
+                edge.get("to"),
+                edge.get("kind"),
+                str(edge.get("remote_interface") or ""),
+            ): dict(edge)
+            for edge in current_model.get("edges", [])
+        }
+        previous_nodes_by_id = {
+            node["id"]: node
+            for node in previous_model.get("nodes", [])
+        }
+
+        previous_index = {}
+        previous_index.update(
+            self._iter_tree_items(previous_model.get("roots", []), section="roots")
+        )
+        previous_index.update(
+            self._iter_tree_items(
+                previous_model.get("unreached_roots", []),
+                section="unreached_roots",
+            )
+        )
+
+        current_index = {}
+        current_index.update(
+            self._iter_tree_items(current_model.get("roots", []), section="roots")
+        )
+        current_index.update(
+            self._iter_tree_items(
+                current_model.get("unreached_roots", []),
+                section="unreached_roots",
+            )
+        )
+
+        missing_devices = []
+        for node_id, prev_node in previous_nodes_by_id.items():
+            if prev_node.get("kind") != "device" or prev_node.get("type") != "mikrotik":
+                continue
+            if node_id in current_nodes_by_id:
+                continue
+            previous_item = previous_index.get(node_id)
+            if not previous_item:
+                continue
+            if previous_item["item"].get("already_shown"):
+                continue
+            missing_devices.append((previous_item["depth"], node_id))
+
+        for _depth, node_id in sorted(missing_devices):
+            prev_node = dict(previous_nodes_by_id[node_id])
+            prev_node["offline"] = True
+            prev_node["status"] = "offline"
+            current_nodes_by_id[node_id] = prev_node
+
+            prev_meta = previous_index[node_id]
+            prev_item = prev_meta["item"]
+            offline_item = {
+                "node_id": node_id,
+                "kind": "device",
+                "children": [],
+            }
+            for key in ("remote_interface", "display_mac"):
+                if prev_item.get(key):
+                    offline_item[key] = prev_item[key]
+
+            parent_id = prev_meta["parent_id"]
+            if parent_id and parent_id in current_index:
+                parent_item = current_index[parent_id]["item"]
+                if not any(child.get("node_id") == node_id for child in parent_item.get("children", [])):
+                    parent_item.setdefault("children", []).append(offline_item)
+                edge_key = (
+                    parent_id,
+                    node_id,
+                    "links_to",
+                    str(offline_item.get("remote_interface") or ""),
+                )
+                edges_by_key[edge_key] = {
+                    "from": parent_id,
+                    "to": node_id,
+                    "kind": "links_to",
+                    **(
+                        {"remote_interface": offline_item["remote_interface"]}
+                        if offline_item.get("remote_interface")
+                        else {}
+                    ),
+                }
+                current_index[node_id] = {
+                    "item": offline_item,
+                    "parent_id": parent_id,
+                    "depth": prev_meta["depth"],
+                    "section": current_index[parent_id]["section"],
+                }
+                continue
+
+            section = prev_meta["section"]
+            target_roots = current_model.setdefault(section, [])
+            if not any(root.get("node_id") == node_id for root in target_roots):
+                target_roots.append(offline_item)
+            current_index[node_id] = {
+                "item": offline_item,
+                "parent_id": None,
+                "depth": prev_meta["depth"],
+                "section": section,
+            }
+
+        current_model["nodes"] = sorted(
+            current_nodes_by_id.values(),
+            key=lambda node: (node["kind"], node["id"]),
+        )
+        current_model["edges"] = sorted(
+            edges_by_key.values(),
+            key=lambda edge: (edge["from"], edge["to"], edge["kind"]),
+        )
+        current_model["root_ids"] = [
+            item["node_id"] for item in current_model.get("roots", [])
+        ]
+        return current_model
 
     def load_layout(self) -> Dict[str, Any]:
         """Load persisted browser layout positions."""
@@ -213,6 +401,7 @@ class MikroscanAPIService:
                 normalized_positions[node_id] = {
                     "dx": float(dx),
                     "dy": float(dy),
+                    "parent_id": str(position.get("parent_id", "") or ""),
                 }
             except (TypeError, ValueError):
                 continue
@@ -276,6 +465,7 @@ class MikroscanAPIService:
 
     def _run_generate_topology(self) -> Dict[str, Any]:
         """Generate topology artifacts from the current collected data."""
+        previous_model = self._load_topology_model_if_exists()
         if not self.mapper.generate_topology(
             data_file=self.data_file,
             output_file=self.topology_output,
@@ -283,6 +473,11 @@ class MikroscanAPIService:
         ):
             raise RuntimeError("topology generation failed")
 
+        merged_model = self._merge_offline_devices(
+            previous_model,
+            self.load_topology_model(),
+        )
+        self._save_topology_outputs(merged_model)
         return self._topology_summary()
 
     def _run_scan_refresh(self, ip_range: str | None = None) -> Dict[str, Any]:
@@ -290,6 +485,8 @@ class MikroscanAPIService:
         credentials_ready, error_message = self._credentials_ready_for_live_actions()
         if not credentials_ready:
             raise RuntimeError(error_message)
+
+        previous_model = self._load_topology_model_if_exists()
 
         if ip_range:
             connection_map = self.mapper.run_full_mapping(
@@ -302,6 +499,8 @@ class MikroscanAPIService:
                 verbose=self.verbose,
                 backend=self.backend,
                 use_api_ssl=self.use_api_ssl,
+                scan_output_file=self.scan_file,
+                data_output_file=self.data_file,
                 output_file=self.map_output,
                 readable_file=self.readable_output,
                 topology_file=self.topology_output,
@@ -309,6 +508,11 @@ class MikroscanAPIService:
             )
             if not connection_map:
                 raise RuntimeError("full network refresh failed")
+            merged_model = self._merge_offline_devices(
+                previous_model,
+                self.load_topology_model(),
+            )
+            self._save_topology_outputs(merged_model)
             return self._build_result_summary(connection_map)
 
         collected_data = self.mapper.collect_data(
@@ -340,6 +544,11 @@ class MikroscanAPIService:
         ):
             raise RuntimeError("topology generation failed")
 
+        merged_model = self._merge_offline_devices(
+            previous_model,
+            self.load_topology_model(),
+        )
+        self._save_topology_outputs(merged_model)
         return self._build_result_summary(connection_map)
 
     def _start_background_action(
@@ -406,6 +615,37 @@ class MikroscanAPIService:
             "scan",
             lambda: self._run_scan_refresh(ip_range=ip_range),
         )
+
+    def _auto_refresh_loop(self) -> None:
+        """Trigger periodic refreshes of the known-device set."""
+        while not self._stop_event.wait(self.refresh_interval):
+            if self.refresh_interval <= 0:
+                continue
+            ready, error_message = self._credentials_ready_for_live_actions()
+            if not ready:
+                logger.debug("Skipping scheduled refresh: %s", error_message)
+                continue
+            started, message = self.trigger_scan()
+            if started:
+                logger.info("Triggered scheduled known-device refresh")
+            else:
+                logger.debug("Skipped scheduled refresh: %s", message)
+
+    def start(self) -> None:
+        """Start background service helpers."""
+        if self.refresh_interval <= 0 or self._scheduler_thread:
+            return
+        self._stop_event.clear()
+        self._scheduler_thread = threading.Thread(
+            target=self._auto_refresh_loop,
+            name="mikroscan-auto-refresh",
+            daemon=True,
+        )
+        self._scheduler_thread.start()
+
+    def stop(self) -> None:
+        """Stop background service helpers."""
+        self._stop_event.set()
 
 
 def create_api_handler(service: MikroscanAPIService):
@@ -554,9 +794,14 @@ class MikroscanAPIServer:
             actual_host,
             actual_port,
         )
-        self.httpd.serve_forever()
+        self.service.start()
+        try:
+            self.httpd.serve_forever()
+        finally:
+            self.service.stop()
 
     def shutdown(self):
         """Stop the API server."""
+        self.service.stop()
         self.httpd.shutdown()
         self.httpd.server_close()
