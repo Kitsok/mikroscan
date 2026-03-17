@@ -19,8 +19,6 @@ from lib.credential_manager import CredentialManager
 from lib.topology_builder import TopologyBuilder
 from lib.web_api import MikroscanAPIService, MikroscanAPIServer
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 DEFAULT_DATA_FILE = "data/collected_data.json"
 DEFAULT_SCAN_FILE = "data/scan_results.json"
