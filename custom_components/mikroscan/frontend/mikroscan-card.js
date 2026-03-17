@@ -152,6 +152,7 @@ class MikroscanMapBase extends HTMLElement {
       viewScale: 1,
       topologyGeneratedAt: "",
       parentMap: new Map(),
+      pendingTopologyReload: false,
     };
     this._resizeObserver = null;
     this._pollTimer = null;
@@ -252,7 +253,11 @@ class MikroscanMapBase extends HTMLElement {
           generatedAt !== this._state.topologyGeneratedAt &&
           !status.running
         ) {
-          await this._loadAll();
+          if (this._canReloadNow()) {
+            await this._loadAll();
+          } else {
+            this._state.pendingTopologyReload = true;
+          }
           return;
         }
         this._render();
@@ -342,6 +347,10 @@ class MikroscanMapBase extends HTMLElement {
       };
     });
     return { positions };
+  }
+
+  _canReloadNow() {
+    return !this._state.drag && !this._state.saveTimer;
   }
 
   _buildDisplayLabel(nodeRef) {
@@ -539,6 +548,10 @@ class MikroscanMapBase extends HTMLElement {
     this._state.saveTimer = window.setTimeout(async () => {
       this._state.saveTimer = null;
       await this._callApi("POST", "api/mikroscan/layout", this._serializeLayout());
+      if (this._state.pendingTopologyReload) {
+        this._state.pendingTopologyReload = false;
+        await this._loadAll();
+      }
     }, 120);
   }
 

@@ -14,6 +14,7 @@
     zoomMultiplier: 1,
     topologyGeneratedAt: "",
     parentMap: new Map(),
+    pendingTopologyReload: false,
   };
 
   const VISIBLE_INTERFACE_TYPES = new Set(["vlan", "pppoe-out", "wg", "zerotier"]);
@@ -577,10 +578,19 @@
       state.saveLayoutTimer = null;
       try {
         await persistLayout();
+        if (state.pendingTopologyReload) {
+          state.pendingTopologyReload = false;
+          await loadStatus();
+          await loadTopology();
+        }
       } catch (_error) {
         return;
       }
     }, 150);
+  }
+
+  function canReloadTopologyNow() {
+    return !state.drag && !state.saveLayoutTimer;
   }
 
   async function waitForIdle() {
@@ -674,7 +684,10 @@
       }
     });
     window.addEventListener("pointercancel", () => {
-      state.drag = null;
+      if (state.drag) {
+        state.drag = null;
+        scheduleLayoutSave();
+      }
     });
     window.addEventListener("resize", () => {
       if (state.topology) {
@@ -709,7 +722,11 @@
           generatedAt !== state.topologyGeneratedAt &&
           !state.status.running
         ) {
-          await loadTopology();
+          if (canReloadTopologyNow()) {
+            await loadTopology();
+          } else {
+            state.pendingTopologyReload = true;
+          }
         }
       } catch (_error) {
         return;
