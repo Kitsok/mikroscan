@@ -10,11 +10,13 @@
     manualPositions: new Map(),
     drag: null,
     saveLayoutTimer: null,
+    saveLayoutInFlight: false,
     viewScale: 1,
     zoomMultiplier: 1,
     topologyGeneratedAt: "",
     parentMap: new Map(),
     pendingTopologyReload: false,
+    renderedPositions: new Map(),
   };
 
   const VISIBLE_INTERFACE_TYPES = new Set(["vlan", "pppoe-out", "wg", "zerotier"]);
@@ -72,9 +74,10 @@
       if (data.kind !== "device" || data.type !== "mikrotik") {
         return;
       }
+      const rendered = state.renderedPositions.get(nodeId) || position;
       positions[nodeId] = {
-        dx: position.dx,
-        dy: position.dy,
+        x: rendered.x,
+        y: rendered.y,
         parent_id: state.parentMap.get(nodeId) || "",
       };
     });
@@ -108,10 +111,10 @@
       if (savedParentId !== currentParentId) {
         return;
       }
-      const dx = Number(position.dx);
-      const dy = Number(position.dy);
-      if (Number.isFinite(dx) && Number.isFinite(dy)) {
-        state.manualPositions.set(nodeId, { dx, dy });
+      const x = Number(position.x);
+      const y = Number(position.y);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        state.manualPositions.set(nodeId, { x, y });
       }
     });
   }
@@ -233,10 +236,19 @@
       const index = group.findIndex((entry) => entry.id === item.id);
       const columnInDepth = Math.floor(index / maxRows);
       const rowInDepth = index % maxRows;
-      const offset = state.manualPositions.get(item.id) || { dx: 0, dy: 0 };
+      const autoX = (baseColumns.get(item.depth) + columnInDepth) * H_SPACING;
+      const autoY = rowInDepth * V_SPACING;
+      const savedPosition = state.manualPositions.get(item.id);
+      const isStableMikrotik = item.data.kind === "device" && item.data.type === "mikrotik";
 
-      item.x = (baseColumns.get(item.depth) + columnInDepth) * H_SPACING + offset.dx;
-      item.y = rowInDepth * V_SPACING + offset.dy;
+      if (isStableMikrotik && savedPosition) {
+        item.x = savedPosition.x;
+        item.y = savedPosition.y;
+        return;
+      }
+
+      item.x = autoX;
+      item.y = autoY;
     });
 
     return items;
@@ -436,6 +448,15 @@
         },
       ]),
     );
+    state.renderedPositions = new Map(
+      items.map((item) => [
+        item.id,
+        {
+          x: item.x,
+          y: item.y,
+        },
+      ]),
+    );
 
     elements.edgeLayer.innerHTML = edges
       .map((edge) => {
@@ -513,7 +534,10 @@
           nodeId: item.id,
           startX: event.clientX,
           startY: event.clientY,
-          base: state.manualPositions.get(item.id) || { dx: 0, dy: 0 },
+          base: state.renderedPositions.get(item.id) || {
+            x: item.x,
+            y: item.y,
+          },
         };
       });
 
@@ -567,7 +591,12 @@
   }
 
   async function persistLayout() {
-    await postAction("api/layout", serializePositions());
+    state.saveLayoutInFlight = true;
+    try {
+      await postAction("api/layout", serializePositions());
+    } finally {
+      state.saveLayoutInFlight = false;
+    }
   }
 
   function scheduleLayoutSave() {
@@ -590,7 +619,7 @@
   }
 
   function canReloadTopologyNow() {
-    return !state.drag && !state.saveLayoutTimer;
+    return !state.drag && !state.saveLayoutTimer && !state.saveLayoutInFlight;
   }
 
   async function waitForIdle() {
@@ -679,8 +708,8 @@
       const dx = event.clientX - state.drag.startX;
       const dy = event.clientY - state.drag.startY;
       state.manualPositions.set(state.drag.nodeId, {
-        dx: state.drag.base.dx + dx / state.viewScale,
-        dy: state.drag.base.dy + dy / state.viewScale,
+        x: state.drag.base.x + dx / state.viewScale,
+        y: state.drag.base.y + dy / state.viewScale,
       });
       renderCanvas();
       renderDetails();

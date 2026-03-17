@@ -149,10 +149,12 @@ class MikroscanMapBase extends HTMLElement {
       manualPositions: new Map(),
       drag: null,
       saveTimer: null,
+      saveInFlight: false,
       viewScale: 1,
       topologyGeneratedAt: "",
       parentMap: new Map(),
       pendingTopologyReload: false,
+      renderedPositions: new Map(),
     };
     this._resizeObserver = null;
     this._pollTimer = null;
@@ -325,10 +327,10 @@ class MikroscanMapBase extends HTMLElement {
       if (savedParentId !== currentParentId) {
         return;
       }
-      const dx = Number(position.dx);
-      const dy = Number(position.dy);
-      if (Number.isFinite(dx) && Number.isFinite(dy)) {
-        this._state.manualPositions.set(nodeId, { dx, dy });
+      const x = Number(position.x);
+      const y = Number(position.y);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        this._state.manualPositions.set(nodeId, { x, y });
       }
     });
   }
@@ -340,9 +342,10 @@ class MikroscanMapBase extends HTMLElement {
       if (data.kind !== "device" || data.type !== "mikrotik") {
         return;
       }
+      const rendered = this._state.renderedPositions.get(nodeId) || position;
       positions[nodeId] = {
-        dx: position.dx,
-        dy: position.dy,
+        x: rendered.x,
+        y: rendered.y,
         parent_id: this._state.parentMap.get(nodeId) || "",
       };
     });
@@ -350,7 +353,7 @@ class MikroscanMapBase extends HTMLElement {
   }
 
   _canReloadNow() {
-    return !this._state.drag && !this._state.saveTimer;
+    return !this._state.drag && !this._state.saveTimer && !this._state.saveInFlight;
   }
 
   _buildDisplayLabel(nodeRef) {
@@ -397,20 +400,23 @@ class MikroscanMapBase extends HTMLElement {
         y = childYs.reduce((sum, value) => sum + value, 0) / childYs.length;
       }
 
-      const offset = this._state.manualPositions.get(nodeRef.node_id) || { dx: 0, dy: 0 };
+      const savedPosition = this._state.manualPositions.get(nodeRef.node_id);
+      const isStableMikrotik = data.kind === "device" && data.type === "mikrotik";
+      const autoX = depth * H_SPACING;
+      const autoY = y;
       items.push({
         id: nodeRef.node_id,
         nodeRef,
         data,
-        x: depth * H_SPACING + offset.dx,
-        y: y + offset.dy,
+        x: isStableMikrotik && savedPosition ? savedPosition.x : autoX,
+        y: isStableMikrotik && savedPosition ? savedPosition.y : autoY,
       });
 
       if (parentId) {
         edges.push({ from: parentId, to: nodeRef.node_id });
       }
 
-      return y + offset.dy;
+      return isStableMikrotik && savedPosition ? savedPosition.y : autoY;
     };
 
     (this._state.topology?.roots || []).forEach((root) => {
@@ -432,6 +438,9 @@ class MikroscanMapBase extends HTMLElement {
     const offsetY = 8;
     this._state.viewScale = scale;
     const positions = new Map(items.map((item) => [item.id, { x: item.x + PADDING, y: item.y + PADDING }]));
+    this._state.renderedPositions = new Map(
+      items.map((item) => [item.id, { x: item.x, y: item.y }]),
+    );
 
     this._canvasEl.style.minHeight = `300px`;
     this._nodesEl.style.width = `${width}px`;
@@ -495,7 +504,10 @@ class MikroscanMapBase extends HTMLElement {
           nodeId: item.id,
           startX: event.clientX,
           startY: event.clientY,
-          base: this._state.manualPositions.get(item.id) || { dx: 0, dy: 0 },
+          base: this._state.renderedPositions.get(item.id) || {
+            x: item.x,
+            y: item.y,
+          },
         };
       });
       this._nodesEl.appendChild(node);
@@ -535,8 +547,8 @@ class MikroscanMapBase extends HTMLElement {
     const dx = event.clientX - this._state.drag.startX;
     const dy = event.clientY - this._state.drag.startY;
     this._state.manualPositions.set(this._state.drag.nodeId, {
-      dx: this._state.drag.base.dx + dx / this._state.viewScale,
-      dy: this._state.drag.base.dy + dy / this._state.viewScale,
+      x: this._state.drag.base.x + dx / this._state.viewScale,
+      y: this._state.drag.base.y + dy / this._state.viewScale,
     });
     this._render();
   }
@@ -547,10 +559,15 @@ class MikroscanMapBase extends HTMLElement {
     if (this._state.saveTimer) window.clearTimeout(this._state.saveTimer);
     this._state.saveTimer = window.setTimeout(async () => {
       this._state.saveTimer = null;
-      await this._callApi("POST", "api/mikroscan/layout", this._serializeLayout());
-      if (this._state.pendingTopologyReload) {
-        this._state.pendingTopologyReload = false;
-        await this._loadAll();
+      this._state.saveInFlight = true;
+      try {
+        await this._callApi("POST", "api/mikroscan/layout", this._serializeLayout());
+        if (this._state.pendingTopologyReload) {
+          this._state.pendingTopologyReload = false;
+          await this._loadAll();
+        }
+      } finally {
+        this._state.saveInFlight = false;
       }
     }, 120);
   }
