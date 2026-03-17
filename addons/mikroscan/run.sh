@@ -20,6 +20,7 @@ API_SSL="$(bashio::config 'api_ssl')"
 VERBOSE="$(bashio::config 'verbose')"
 DEVICE_USERNAME="$(bashio::config 'device_username')"
 DEVICE_PASSWORD="$(bashio::config 'device_password')"
+ADDON_VERSION="$(bashio::addon.version)"
 
 if [[ -n "${DEVICE_USERNAME}" && -z "${DEVICE_PASSWORD}" ]]; then
   bashio::log.fatal "device_password must be set when device_username is provided"
@@ -61,6 +62,8 @@ if [[ -n "${DEVICE_USERNAME}" ]]; then
 fi
 
 export MIKROSCAN_ALLOWED_CLIENTS="172.30.32.2,127.0.0.1,::1"
+export MIKROSCAN_VERSION="${ADDON_VERSION}"
+export MIKROSCAN_BUILD_ID="${ADDON_VERSION}"
 
 bashio::log.info "Starting Mikroscan app"
 cd "${APP_DIR}"
