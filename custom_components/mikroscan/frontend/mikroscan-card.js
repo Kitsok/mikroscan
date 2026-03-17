@@ -557,14 +557,22 @@ class MikroscanMapBase extends HTMLElement {
 
   async _generateTopology() {
     await this._hass.callService("mikroscan", "generate_topology", {});
-    await this._loadAll();
+    if (this._canReloadNow()) {
+      await this._loadAll();
+    } else {
+      this._state.pendingTopologyReload = true;
+    }
   }
 
   async _scan() {
     const scanRange = this._config.scan_range || "";
     const payload = scanRange ? { ip_range: scanRange } : {};
     await this._hass.callService("mikroscan", "scan", payload);
-    await this._loadAll();
+    if (this._canReloadNow()) {
+      await this._loadAll();
+    } else {
+      this._state.pendingTopologyReload = true;
+    }
   }
 }
 

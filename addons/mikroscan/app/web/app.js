@@ -608,7 +608,11 @@
     await waitForIdle();
     await loadStatus();
     if (state.status.last_success) {
-      await loadTopology();
+      if (canReloadTopologyNow()) {
+        await loadTopology();
+      } else {
+        state.pendingTopologyReload = true;
+      }
       return;
     }
     throw new Error(state.status.last_error || "topology generation failed");
@@ -620,7 +624,11 @@
     await waitForIdle();
     await loadStatus();
     if (state.status.last_success) {
-      await loadTopology();
+      if (canReloadTopologyNow()) {
+        await loadTopology();
+      } else {
+        state.pendingTopologyReload = true;
+      }
       return;
     }
     throw new Error(state.status.last_error || "scan failed");
