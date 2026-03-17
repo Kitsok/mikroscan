@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+version="$(python3 "$repo_root/tools/update_versions.py" --bump)"
+git add "$repo_root/VERSION" \
+  "$repo_root/addons/mikroscan/config.yaml" \
+  "$repo_root/custom_components/mikroscan/manifest.json"
+printf 'Bumped Mikroscan version to %s\n' "$version" >&2

@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+VERSION_FILE = REPO_ROOT / "VERSION"
 OUTPUTS = [
     REPO_ROOT / "web" / "build_info.json",
     REPO_ROOT / "addons" / "mikroscan" / "app" / "web" / "build_info.json",
@@ -24,9 +25,16 @@ def current_build_id() -> str:
     return result.stdout.strip()
 
 
+def current_version() -> str:
+    return VERSION_FILE.read_text(encoding="utf-8").strip()
+
+
 def main() -> int:
     build_id = current_build_id()
-    payload = {"build_id": build_id}
+    payload = {
+        "build_id": build_id,
+        "version": current_version(),
+    }
 
     for output in OUTPUTS:
         output.parent.mkdir(parents=True, exist_ok=True)

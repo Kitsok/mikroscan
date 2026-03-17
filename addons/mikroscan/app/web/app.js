@@ -230,7 +230,8 @@
     elements.generateTopology.disabled = busy;
     elements.scanNetwork.disabled = busy;
     if (elements.buildId) {
-      elements.buildId.textContent = `build ${status.build_id || "unknown"}`;
+      elements.buildId.textContent =
+        `v${status.app_version || "unknown"} • build ${status.build_id || "unknown"}`;
     }
   }
 

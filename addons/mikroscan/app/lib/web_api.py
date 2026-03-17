@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 BUILD_INFO_FILE = WEB_ROOT / "build_info.json"
+VERSION_FILE = WEB_ROOT.parent / "VERSION"
 
 
 class MikroscanAPIService:
@@ -135,6 +136,32 @@ class MikroscanAPIService:
 
         return "unknown"
 
+    def _app_version(self) -> str:
+        """Resolve the current installable version for UI display."""
+        env_version = os.environ.get("MIKROSCAN_VERSION", "").strip()
+        if env_version:
+            return env_version
+
+        if VERSION_FILE.exists():
+            try:
+                version = VERSION_FILE.read_text(encoding="utf-8").strip()
+                if version:
+                    return version
+            except Exception as exc:
+                logger.debug("Unable to read VERSION file: %s", exc)
+
+        if BUILD_INFO_FILE.exists():
+            try:
+                with open(BUILD_INFO_FILE, "r") as handle:
+                    payload = json.load(handle)
+                version = str(payload.get("version", "")).strip()
+                if version:
+                    return version
+            except Exception as exc:
+                logger.debug("Unable to read build version from build_info.json: %s", exc)
+
+        return "unknown"
+
     def get_status(self) -> Dict[str, Any]:
         """Return current API service status plus topology summary."""
         with self._status_lock:
@@ -142,6 +169,7 @@ class MikroscanAPIService:
 
         status["topology"] = self._topology_summary()
         status["build_id"] = self._build_id()
+        status["app_version"] = self._app_version()
         status["scan_file"] = self.scan_file
         status["data_file"] = self.data_file
         return status
