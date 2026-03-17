@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+python3 "$repo_root/tools/update_build_info.py" >/dev/null 2>&1 || true

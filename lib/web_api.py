@@ -5,6 +5,7 @@ import json
 import logging
 import mimetypes
 import os
+import subprocess
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,7 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
+BUILD_INFO_FILE = WEB_ROOT / "build_info.json"
 
 
 class MikroscanAPIService:
@@ -97,12 +99,49 @@ class MikroscanAPIService:
             "unresolved_host_count": len(model.get("unresolved_hosts", [])),
         }
 
+    def _build_id(self) -> str:
+        """Resolve the current build identifier for UI display."""
+        env_build_id = os.environ.get("MIKROSCAN_BUILD_ID", "").strip()
+        if env_build_id:
+            return env_build_id
+
+        project_root = WEB_ROOT.parent
+        git_dir = project_root / ".git"
+        if git_dir.exists():
+            try:
+                result = subprocess.run(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    cwd=project_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    check=True,
+                )
+                build_id = result.stdout.strip()
+                if build_id:
+                    return build_id
+            except Exception as exc:
+                logger.debug("Unable to resolve git build id: %s", exc)
+
+        if BUILD_INFO_FILE.exists():
+            try:
+                with open(BUILD_INFO_FILE, "r") as handle:
+                    payload = json.load(handle)
+                build_id = str(payload.get("build_id", "")).strip()
+                if build_id:
+                    return build_id
+            except Exception as exc:
+                logger.debug("Unable to read build info file: %s", exc)
+
+        return "unknown"
+
     def get_status(self) -> Dict[str, Any]:
         """Return current API service status plus topology summary."""
         with self._status_lock:
             status = dict(self._status)
 
         status["topology"] = self._topology_summary()
+        status["build_id"] = self._build_id()
         status["scan_file"] = self.scan_file
         status["data_file"] = self.data_file
         return status

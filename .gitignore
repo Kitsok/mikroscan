@@ -129,3 +129,7 @@ mikrotik_devices.json
 
 # Log files
 *.log
+
+# Generated build metadata
+web/build_info.json
+addons/mikroscan/app/web/build_info.json

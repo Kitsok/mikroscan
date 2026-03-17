@@ -19,6 +19,7 @@
   const PADDING = 48;
 
   const elements = {
+    buildId: document.getElementById("build-id"),
     mapTitle: document.getElementById("map-title"),
     nodeLayer: document.getElementById("node-layer"),
     edgeLayer: document.getElementById("edge-layer"),
@@ -190,6 +191,9 @@
     const busy = Boolean(status.running);
     elements.generateTopology.disabled = busy;
     elements.scanNetwork.disabled = busy;
+    if (elements.buildId) {
+      elements.buildId.textContent = `build ${status.build_id || "unknown"}`;
+    }
   }
 
   function renderDetails() {
