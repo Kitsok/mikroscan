@@ -70,10 +70,6 @@
   function serializePositions() {
     const positions = {};
     state.manualPositions.forEach((position, nodeId) => {
-      const data = getNodeData(nodeId);
-      if (data.kind !== "device" || data.type !== "mikrotik") {
-        return;
-      }
       const rendered = state.renderedPositions.get(nodeId) || position;
       positions[nodeId] = {
         x: rendered.x,
@@ -118,10 +114,6 @@
     const positions = layout?.positions || {};
     Object.entries(positions).forEach(([nodeId, position]) => {
       if (!state.nodeMap.has(nodeId) || typeof position !== "object") {
-        return;
-      }
-      const data = getNodeData(nodeId);
-      if (data.kind !== "device" || data.type !== "mikrotik") {
         return;
       }
       const savedParentId = String(position.parent_id || "");
@@ -643,6 +635,38 @@
     }, 150);
   }
 
+  function flushLayoutBeforeHide() {
+    if (state.saveLayoutTimer) {
+      window.clearTimeout(state.saveLayoutTimer);
+      state.saveLayoutTimer = null;
+    }
+    if (state.drag) {
+      state.drag = null;
+    }
+    if (state.saveLayoutInFlight) {
+      return;
+    }
+
+    const payload = serializePositions();
+    if (!Object.keys(payload.positions || {}).length) {
+      return;
+    }
+
+    const body = JSON.stringify(payload);
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], { type: "application/json" });
+      navigator.sendBeacon("api/layout", blob);
+      return;
+    }
+
+    fetch("api/layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      keepalive: true,
+    }).catch(() => {});
+  }
+
   function canReloadTopologyNow() {
     return !state.drag && !state.saveLayoutTimer && !state.saveLayoutInFlight;
   }
@@ -728,6 +752,14 @@
         state.drag = null;
         scheduleLayoutSave();
       }
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        flushLayoutBeforeHide();
+      }
+    });
+    window.addEventListener("pagehide", () => {
+      flushLayoutBeforeHide();
     });
     window.addEventListener("resize", () => {
       if (state.topology) {
