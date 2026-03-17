@@ -438,12 +438,14 @@ class MikroscanAPIService:
             if not isinstance(node_id, str) or not isinstance(position, dict):
                 continue
 
-            dx = position.get("dx", 0)
-            dy = position.get("dy", 0)
+            x = position.get("x")
+            y = position.get("y")
+            if x is None or y is None:
+                continue
             try:
                 normalized_positions[node_id] = {
-                    "dx": float(dx),
-                    "dy": float(dy),
+                    "x": float(x),
+                    "y": float(y),
                     "parent_id": str(position.get("parent_id", "") or ""),
                 }
             except (TypeError, ValueError):
